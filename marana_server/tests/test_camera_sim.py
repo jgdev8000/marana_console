@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 
 pyAndorSDK3 = pytest.importorskip("pyAndorSDK3")
 
@@ -90,3 +91,28 @@ def test_invalid_aoi_raises(sim_cam):
     # Validation happens before any SDK write — should raise FeatureValueOutOfRange.
     with pytest.raises(FeatureValueOutOfRange):
         sim_cam.set_aoi(0, 10_000, 0, 10_000)  # beyond sensor
+
+
+def test_single_shot_returns_uint16_2d(sim_cam):
+    sim_cam.set_feature("ExposureTime", 0.001)
+    sim_cam.set_feature("PixelEncoding", "Mono12")
+    frame = sim_cam.single_shot(timeout_ms=3000)
+    assert frame.dtype == np.uint16
+    assert frame.ndim == 2
+    assert frame.shape == (sim_cam.sensor_height, sim_cam.sensor_width)
+
+
+def test_safe_continuous_iter_yields_multiple_frames(sim_cam):
+    sim_cam.set_feature("ExposureTime", 0.001)
+    sim_cam.set_feature("PixelEncoding", "Mono12")
+    frames = []
+    it = sim_cam.safe_continuous_iter(inter_frame_sleep_s=0.0)
+    for i, f in enumerate(it):
+        frames.append(f)
+        if i >= 2:  # 3 frames total
+            it.close()
+            break
+    assert len(frames) == 3
+    for f in frames:
+        assert f.shape == (sim_cam.sensor_height, sim_cam.sensor_width)
+        assert f.dtype == np.uint16

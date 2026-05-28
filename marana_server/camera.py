@@ -29,9 +29,14 @@ def _install_pyandorsdk3_sim_patch() -> None:
         try:
             orig(self, force)
         except ATCoreException as e:
-            if getattr(e, "err_code", None) == 2:  # AT_ERR_NOTIMPLEMENTED
-                return
-            raise
+            if getattr(e, "err_code", None) != 2:  # AT_ERR_NOTIMPLEMENTED
+                raise
+        # Ensure keys downstream code expects exist with safe defaults,
+        # even when the camera didn't report them. pyAndorSDK3.Acquisition
+        # reads config['MetadataEnable'] when wait_buffer fires.
+        for k, default in (("MetadataEnable", False),):
+            if k not in self._Camera__current_config:
+                self._Camera__current_config[k] = default
 
     Camera._Camera__populate_config = patched
     Camera._marana_patched = True
@@ -173,3 +178,82 @@ class MaranaCamera:
 
     def set_aoi_full(self) -> None:
         self.set_aoi(0, self.sensor_width - 1, 0, self.sensor_height - 1)
+
+    # --- acquisition primitives ------------------------------------------
+
+    def _configure_single_frame_mode(self, exposure_s: float | None = None) -> None:
+        cam = self._require()
+        if exposure_s is not None:
+            cam.ExposureTime = exposure_s
+        cam.CycleMode = "Fixed"
+        cam.FrameCount = 1
+        cam.TriggerMode = "Internal"
+
+    def _decode_buffer(self, raw_buf, image_bytes: int):
+        """Decode a raw uint8 buffer into a (H, W) uint16 numpy array, trimming row stride."""
+        import numpy as np
+        cam = self._require()
+        height = int(cam.AOIHeight)
+        width = int(cam.AOIWidth)
+        stride = int(cam.AOIStride)
+        if not isinstance(raw_buf, np.ndarray):
+            arr = np.frombuffer(raw_buf, dtype=np.uint8, count=image_bytes)
+        else:
+            arr = raw_buf[:image_bytes].view(np.uint8)
+        view16 = arr[: height * stride].view(np.uint16)
+        cols_in_stride = stride // 2
+        view16 = view16.reshape(height, cols_in_stride)
+        return view16[:, :width].copy()  # copy: caller can re-queue the buffer
+
+    def single_shot(self, timeout_ms: int = 3000, exposure_s: float | None = None):
+        import numpy as np
+        from marana_proto.errors import AcquisitionTimeout
+        cam = self._require()
+        try:
+            self._configure_single_frame_mode(exposure_s=exposure_s)
+            image_bytes = int(cam.ImageSizeBytes)
+            buf = np.empty(image_bytes, dtype=np.uint8)
+            cam.queue(buf, image_bytes)
+            cam.AcquisitionStart()
+            try:
+                cam.wait_buffer(timeout=timeout_ms)
+            finally:
+                cam.AcquisitionStop()
+                cam.flush()
+            return self._decode_buffer(buf, image_bytes)
+        except Exception as e:
+            if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
+                raise AcquisitionTimeout(str(e)) from e
+            raise self._translate_sdk_error(e, "single_shot") from e
+
+    def safe_continuous_iter(self, exposure_s: float | None = None, inter_frame_sleep_s: float = 0.01):
+        """Generator that yields frames forever. Caller calls .close() or breaks to stop.
+
+        Implements the BL11.3.2 ICE server's "safe continuous" pattern:
+        per-frame CycleMode=Fixed + FrameCount=1 + AcquisitionStart/Stop cycle.
+        """
+        import numpy as np
+        import time
+        from marana_proto.errors import AcquisitionTimeout
+        cam = self._require()
+        self._configure_single_frame_mode(exposure_s=exposure_s)
+        image_bytes = int(cam.ImageSizeBytes)
+        try:
+            while True:
+                buf = np.empty(image_bytes, dtype=np.uint8)
+                cam.queue(buf, image_bytes)
+                cam.AcquisitionStart()
+                try:
+                    cam.wait_buffer(timeout=int(2000 + 1000 * (exposure_s or 0.05)))
+                finally:
+                    cam.AcquisitionStop()
+                    cam.flush()
+                yield self._decode_buffer(buf, image_bytes)
+                if inter_frame_sleep_s > 0:
+                    time.sleep(inter_frame_sleep_s)
+        except GeneratorExit:
+            return
+        except Exception as e:
+            if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
+                raise AcquisitionTimeout(str(e)) from e
+            raise self._translate_sdk_error(e, "safe_continuous_iter") from e
