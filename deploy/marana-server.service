@@ -1,0 +1,25 @@
+[Unit]
+Description=Andor Marana camera server (ZeroMQ)
+Documentation=file:///opt/marana/marana_console/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=andor
+Group=andor
+WorkingDirectory=/opt/marana/marana_console
+Environment="PATH=/opt/marana/venv/bin:/usr/bin"
+ExecStart=/opt/marana/venv/bin/python -m marana_server \
+  --bind 0.0.0.0 \
+  --ctrl-port 5555 \
+  --frame-port 5556 \
+  --captures-dir /var/lib/marana/captures \
+  --log-level INFO
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/marana/server.log
+StandardError=append:/var/log/marana/server.log
+
+[Install]
+WantedBy=multi-user.target
