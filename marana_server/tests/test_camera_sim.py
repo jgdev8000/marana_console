@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 import numpy as np
 
@@ -116,3 +118,40 @@ def test_safe_continuous_iter_yields_multiple_frames(sim_cam):
     for f in frames:
         assert f.shape == (sim_cam.sensor_height, sim_cam.sensor_width)
         assert f.dtype == np.uint16
+
+
+def test_kinetic_small_burst(sim_cam):
+    sim_cam.set_feature("PixelEncoding", "Mono12")
+    progress_calls = []
+
+    def on_progress(done, total, fps):
+        progress_calls.append((done, total))
+
+    stop = threading.Event()
+    frames, count, elapsed = sim_cam.kinetic_burst(
+        frame_count=8, exposure_s=0.001, frame_rate_hz=20.0,
+        on_progress=on_progress, stop_flag=stop,
+    )
+    assert frames.shape == (8, sim_cam.sensor_height, sim_cam.sensor_width)
+    assert frames.dtype == np.uint16
+    assert count == 8
+    assert elapsed > 0
+    assert len(progress_calls) >= 1
+    assert progress_calls[-1][0] == 8
+
+
+def test_kinetic_cancel_returns_partial(sim_cam):
+    sim_cam.set_feature("PixelEncoding", "Mono12")
+    stop = threading.Event()
+
+    def on_progress(done, total, fps):
+        if done >= 3:
+            stop.set()
+
+    frames, count, elapsed = sim_cam.kinetic_burst(
+        frame_count=20, exposure_s=0.001, frame_rate_hz=10.0,
+        on_progress=on_progress, stop_flag=stop,
+    )
+    assert count >= 3
+    assert count < 20
+    assert frames.shape == (20, sim_cam.sensor_height, sim_cam.sensor_width)  # preallocated full size

@@ -257,3 +257,95 @@ class MaranaCamera:
             if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
                 raise AcquisitionTimeout(str(e)) from e
             raise self._translate_sdk_error(e, "safe_continuous_iter") from e
+
+    def kinetic_burst(
+        self,
+        frame_count: int,
+        exposure_s: float,
+        frame_rate_hz: float,
+        on_progress=None,
+        stop_flag=None,
+    ):
+        """Run a fixed-length burst. Returns (frames_3d, frames_written, elapsed_s).
+
+        Auto-batching rule (matches BL11.3.2 ICE server):
+            if ImageSizeBytes > 1MB and frame_count > 25:
+                run in batches of 25 frames with 5 s pause between.
+        """
+        import numpy as np
+        import time
+        import threading
+        from marana_proto.errors import KineticValidationError, AcquisitionTimeout
+
+        if not (1 <= frame_count <= 10000):
+            raise KineticValidationError(f"frame_count {frame_count} not in [1, 10000]")
+        if not (0.0 < exposure_s <= 60.0):
+            raise KineticValidationError(f"exposure_s {exposure_s} not in (0, 60]")
+        if not (0.0 < frame_rate_hz <= 200.0):
+            raise KineticValidationError(f"frame_rate_hz {frame_rate_hz} not in (0, 200]")
+        if stop_flag is None:
+            stop_flag = threading.Event()
+
+        cam = self._require()
+        cam.CycleMode = "Continuous"
+        cam.TriggerMode = "Internal"
+        cam.ExposureTime = exposure_s
+        try:
+            cam.FrameRate = frame_rate_hz
+        except Exception:
+            pass  # sim or small-AOI may reject FrameRate; carry on
+
+        image_bytes = int(cam.ImageSizeBytes)
+        height = int(cam.AOIHeight)
+        width = int(cam.AOIWidth)
+        frames = np.zeros((frame_count, height, width), dtype=np.uint16)
+
+        batch_size = 25 if (image_bytes > 1_000_000 and frame_count > 25) else frame_count
+        inter_batch_s = 5.0 if batch_size < frame_count else 0.0
+
+        ring_size = min(16, batch_size)
+        ring = [np.empty(image_bytes, dtype=np.uint8) for _ in range(ring_size)]
+
+        t0 = time.monotonic()
+        done = 0
+        try:
+            i_batch_start = 0
+            while i_batch_start < frame_count and not stop_flag.is_set():
+                i_batch_end = min(i_batch_start + batch_size, frame_count)
+                this_batch = i_batch_end - i_batch_start
+                for r in range(min(ring_size, this_batch)):
+                    cam.queue(ring[r], image_bytes)
+                cam.AcquisitionStart()
+                try:
+                    for i in range(this_batch):
+                        if stop_flag.is_set():
+                            break
+                        try:
+                            cam.wait_buffer(timeout=int(2000 + 1000 * exposure_s))
+                        except Exception as e:
+                            if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
+                                raise AcquisitionTimeout(str(e)) from e
+                            raise
+                        buf = ring[i % ring_size]
+                        frames[done] = self._decode_buffer(buf, image_bytes)
+                        done += 1
+                        next_q = i + ring_size
+                        if next_q < this_batch:
+                            cam.queue(ring[i % ring_size], image_bytes)
+                        if on_progress is not None:
+                            elapsed = time.monotonic() - t0
+                            fps = done / elapsed if elapsed > 0 else 0.0
+                            on_progress(done, frame_count, fps)
+                finally:
+                    cam.AcquisitionStop()
+                    cam.flush()
+                i_batch_start = i_batch_end
+                if i_batch_start < frame_count and not stop_flag.is_set():
+                    time.sleep(inter_batch_s)
+        finally:
+            try:
+                cam.CycleMode = "Fixed"
+            except Exception:
+                pass
+
+        return frames, done, time.monotonic() - t0
