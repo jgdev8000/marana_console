@@ -349,3 +349,39 @@ class MaranaCamera:
                 pass
 
         return frames, done, time.monotonic() - t0
+
+    # --- cooling ---------------------------------------------------------
+
+    def get_cooling(self) -> dict:
+        """Best-effort cooling readout. Returns defaults for fields the camera doesn't expose."""
+        cam = self._require()
+        out = {"enabled": False, "target_c": 0.0, "sensor_temp_c": 0.0, "status": "Unknown"}
+        try:
+            out["enabled"] = bool(cam.SensorCooling)
+        except Exception:
+            pass
+        try:
+            out["target_c"] = float(cam.TargetSensorTemperature)
+        except Exception:
+            pass
+        try:
+            out["sensor_temp_c"] = float(cam.SensorTemperature)
+        except Exception:
+            pass
+        try:
+            out["status"] = str(cam.TemperatureStatus)
+        except Exception:
+            pass
+        return out
+
+    def set_cooling(self, enable: bool, target_c: float | None = None) -> None:
+        cam = self._require()
+        if target_c is not None:
+            try:
+                cam.TargetSensorTemperature = float(target_c)
+            except Exception:
+                pass  # camera may not allow setting target while cooling off
+        try:
+            cam.SensorCooling = bool(enable)
+        except Exception:
+            pass

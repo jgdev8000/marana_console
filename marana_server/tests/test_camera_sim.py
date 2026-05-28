@@ -155,3 +155,21 @@ def test_kinetic_cancel_returns_partial(sim_cam):
     assert count >= 3
     assert count < 20
     assert frames.shape == (20, sim_cam.sensor_height, sim_cam.sensor_width)  # preallocated full size
+
+
+def test_get_cooling_state_returns_dict(sim_cam):
+    state = sim_cam.get_cooling()
+    assert "enabled" in state
+    assert "target_c" in state
+    assert "sensor_temp_c" in state
+    assert "status" in state
+    assert isinstance(state["enabled"], bool)
+    assert isinstance(state["target_c"], (int, float))
+    assert isinstance(state["sensor_temp_c"], (int, float))
+    assert isinstance(state["status"], str)
+
+
+def test_set_cooling_does_not_raise(sim_cam):
+    # Sim may not actually cool, but the call shouldn't blow up.
+    sim_cam.set_cooling(enable=True, target_c=-30.0)
+    sim_cam.set_cooling(enable=False, target_c=-30.0)
