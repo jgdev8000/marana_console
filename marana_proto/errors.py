@@ -29,6 +29,7 @@ class RamBudgetExceeded(MaranaError):
 _WIRE_NAME_TO_CLASS = {
     cls.__name__: cls
     for cls in (
+        MaranaError,
         CameraDisconnected,
         FeatureNotWritable,
         AcquisitionTimeout,

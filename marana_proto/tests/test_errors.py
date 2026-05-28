@@ -47,3 +47,12 @@ def test_all_concrete_types_subclass_base():
         RamBudgetExceeded,
     ):
         assert issubclass(cls, MaranaError)
+
+
+def test_bare_maranaerror_round_trips_cleanly():
+    exc = MaranaError("base error message")
+    envelope = to_wire(exc)
+    assert envelope == {"type": "MaranaError", "message": "base error message"}
+    decoded = from_wire(envelope)
+    assert type(decoded) is MaranaError
+    assert str(decoded) == "base error message"
