@@ -76,3 +76,34 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.live_indicator.setText("[STOPPED]")
             self.live_indicator.setStyleSheet("color: #94a3b8; padding: 0 12px;")
+
+    def install_image_view(self, image_view: QtWidgets.QWidget) -> None:
+        lay = QtWidgets.QVBoxLayout(self.image_view_container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(image_view)
+        self._image_view = image_view
+
+    def install_left_panels(self, live_panel: QtWidgets.QWidget, kinetic_panel: QtWidgets.QWidget) -> None:
+        lay_l = QtWidgets.QVBoxLayout(self.live_tab)
+        lay_l.setContentsMargins(0, 0, 0, 0); lay_l.addWidget(live_panel)
+        lay_k = QtWidgets.QVBoxLayout(self.kinetic_tab)
+        lay_k.setContentsMargins(0, 0, 0, 0); lay_k.addWidget(kinetic_panel)
+        self._live_panel = live_panel
+        self._kinetic_panel = kinetic_panel
+        # Re-parent the scrubber into the strip
+        strip_lay = QtWidgets.QHBoxLayout(self.scrubber_strip)
+        strip_lay.setContentsMargins(8, 4, 8, 4)
+        strip_lay.addWidget(kinetic_panel.scrubber_label)
+        strip_lay.addWidget(kinetic_panel.scrubber, stretch=1)
+
+    def install_right_panels(self, cooling, display_p, contrast, status_log) -> None:
+        for w in (cooling, display_p, contrast, status_log):
+            self.right_column.layout().addWidget(w)
+        self.right_column.layout().addStretch(1)
+        self._cooling = cooling
+        self._display = display_p
+        self._contrast = contrast
+        self._log = status_log
+
+    def show_scrubber(self, show: bool) -> None:
+        self.scrubber_strip.setVisible(show)

@@ -1,0 +1,287 @@
+"""Entry point: python -m marana_client [options]"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+
+import numpy as np
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from marana_client import config as cfg_mod
+from marana_client.client import MaranaClient, ClientRequestTimeout
+from marana_client.io_tiff import write_snapshot
+from marana_client.meta import build_snapshot_metadata
+from marana_client.worker import ClientWorker
+from marana_client.ui.connection_card import ConnectionCard
+from marana_client.ui.image_view import MaranaImageView, ContrastMode
+from marana_client.ui.kinetic_panel import KineticPanel
+from marana_client.ui.kinetic_save_dialog import KineticSaveDialog
+from marana_client.ui.live_panel import LivePanel
+from marana_client.ui.main_window import MainWindow
+from marana_client.ui.side_panels import (
+    CoolingPanel, DisplayPanel, ContrastPanel, StatusLog,
+)
+from marana_client.ui.theme import apply_theme
+from marana_proto import messages as m
+from marana_proto.errors import MaranaError
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="marana_client")
+    cfg = cfg_mod.load()
+    p.add_argument("--host", default=cfg["host"])
+    p.add_argument("--ctrl-port", type=int, default=cfg["ctrl_port"])
+    p.add_argument("--frame-port", type=int, default=cfg["frame_port"])
+    return p.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
+    app = QtWidgets.QApplication(sys.argv)
+    apply_theme(app)
+
+    cfg = cfg_mod.load()
+    cfg["host"] = args.host
+    cfg["ctrl_port"] = args.ctrl_port
+    cfg["frame_port"] = args.frame_port
+    cfg_mod.save(cfg)
+
+    ctrl_ep = f"tcp://{args.host}:{args.ctrl_port}"
+    pub_ep = f"tcp://{args.host}:{args.frame_port}"
+    client = MaranaClient(ctrl_endpoint=ctrl_ep, pub_endpoint=pub_ep, default_timeout_ms=3000)
+
+    # MainWindow
+    win = MainWindow(host=args.host)
+    image_view = MaranaImageView()
+    win.install_image_view(image_view)
+    live = LivePanel(); kinetic = KineticPanel()
+    win.install_left_panels(live, kinetic)
+    cooling = CoolingPanel(); disp = DisplayPanel(); contrast = ContrastPanel(); status_log = StatusLog()
+    win.install_right_panels(cooling, disp, contrast, status_log)
+
+    # Worker
+    worker = ClientWorker(client)
+    th = QtCore.QThread()
+    worker.moveToThread(th)
+    th.started.connect(worker.run)
+    th.start()
+
+    # State the GUI mirrors
+    server_info: dict = {}
+    latest_live_header: dict = {}
+    latest_live_frame: np.ndarray | None = None
+
+    # --- Hello + populate features ---
+    try:
+        server_info = client.request("hello", {}, timeout_ms=3000)
+        win.set_camera_info(server_info.get("camera_model", "--"), server_info.get("camera_serial", "--"))
+        win.connection_card.set_state(ConnectionCard.STATE_HEALTHY)
+        status_log.append(f"Connected to {server_info.get('camera_model', '?')}", "info")
+    except ClientRequestTimeout:
+        win.connection_card.set_state(ConnectionCard.STATE_DEGRADED)
+        status_log.append(f"hello timeout connecting to {args.host}", "error")
+    except Exception as e:
+        status_log.append(f"connect failed: {e}", "error")
+
+    # Populate combos (each get_feature returns options for enum features)
+    opts: dict[str, list[str]] = {}
+    values: dict = {}
+    for name in ("ExposureTime", "PixelEncoding", "PixelReadoutRate", "ElectronicShutteringMode"):
+        try:
+            r = client.request("get_feature", {"name": name})
+            if "value" in r:
+                values[name] = r["value"]
+            if r.get("options"):
+                opts[name] = list(r["options"])
+        except Exception as e:
+            status_log.append(f"get_feature {name} failed: {e}", "warn")
+    live.populate_feature_options(opts)
+    live.set_current_values(values)
+
+    # AOI initial query
+    try:
+        x0 = client.request("get_feature", {"name": "AOILeft"})["value"] - 1
+        y0 = client.request("get_feature", {"name": "AOITop"})["value"] - 1
+        w_ = client.request("get_feature", {"name": "AOIWidth"})["value"]
+        h_ = client.request("get_feature", {"name": "AOIHeight"})["value"]
+        live.set_aoi_values(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
+        kinetic.set_aoi_for_estimate(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
+    except Exception as e:
+        status_log.append(f"AOI initial read failed: {e}", "warn")
+
+    # --- Wire signals -> client REQs ---
+    def safe_req(cmd: str, args_: dict | None = None, timeout_ms: int | None = None):
+        try:
+            return client.request(cmd, args_ or {}, timeout_ms=timeout_ms)
+        except ClientRequestTimeout:
+            status_log.append(f"{cmd}: timeout", "warn")
+            win.connection_card.set_state(ConnectionCard.STATE_DEGRADED)
+        except MaranaError as e:
+            status_log.append(f"{cmd}: {e}", "error")
+        except Exception as e:
+            status_log.append(f"{cmd}: {e}", "error")
+        return None
+
+    live.requestSetFeature.connect(lambda n, v: safe_req("set_feature", {"name": n, "value": v}))
+    live.requestStartLive.connect(lambda: (safe_req("start_live", {}), win.set_live_indicator(True)))
+    live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False)))
+    live.requestSetAoiFull.connect(lambda: (
+        safe_req("set_feature", {"name": "AOIWidth", "value": server_info.get("sensor_w", 2048)}),
+        safe_req("set_feature", {"name": "AOIHeight", "value": server_info.get("sensor_h", 2048)}),
+        safe_req("set_feature", {"name": "AOILeft", "value": 1}),
+        safe_req("set_feature", {"name": "AOITop", "value": 1}),
+    ))
+    live.requestSetAoi.connect(lambda x0, x1, y0, y1: (
+        safe_req("set_feature", {"name": "AOIWidth", "value": x1 - x0 + 1}),
+        safe_req("set_feature", {"name": "AOIHeight", "value": y1 - y0 + 1}),
+        safe_req("set_feature", {"name": "AOILeft", "value": x0 + 1}),
+        safe_req("set_feature", {"name": "AOITop", "value": y0 + 1}),
+        kinetic.set_aoi_for_estimate(x0, x1, y0, y1),
+    ))
+
+    # Snapshot save (PC-side)
+    def _snap_now():
+        if latest_live_frame is None:
+            status_log.append("no live frame to snap", "warn")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            win, "Save snapshot", f"{cfg.get('snapshot_dir', '.')}/marana.tif", "TIFF (*.tif)")
+        if not path:
+            return
+        md = build_snapshot_metadata(server_info, latest_live_header,
+                                     display={"rot": image_view.state.rot,
+                                              "flip_h": image_view.state.flip_h,
+                                              "flip_v": image_view.state.flip_v})
+        try:
+            write_snapshot(path, latest_live_frame.copy(), md)
+            status_log.append(f"saved {path}", "info")
+            cfg["snapshot_dir"] = os.path.dirname(path); cfg_mod.save(cfg)
+        except Exception as e:
+            status_log.append(f"save failed: {e}", "error")
+
+    def _acquire_and_save():
+        r = safe_req("snap_single", {"exposure_s": live.exposure_spin.value()}, timeout_ms=60000)
+        if r is None:
+            return
+        arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            win, "Save acquired image", f"{cfg.get('snapshot_dir', '.')}/marana.tif", "TIFF (*.tif)")
+        if not path:
+            return
+        md = build_snapshot_metadata(server_info, r["header"],
+                                     display={"rot": image_view.state.rot,
+                                              "flip_h": image_view.state.flip_h,
+                                              "flip_v": image_view.state.flip_v})
+        try:
+            write_snapshot(path, arr, md)
+            status_log.append(f"saved {path}", "info")
+            cfg["snapshot_dir"] = os.path.dirname(path); cfg_mod.save(cfg)
+        except Exception as e:
+            status_log.append(f"save failed: {e}", "error")
+
+    live.requestSnapNow.connect(_snap_now)
+    live.requestAcquireAndSave.connect(_acquire_and_save)
+
+    # Kinetic flow
+    def _start_kinetic(n, e, fps):
+        r = safe_req("start_kinetic", {"frame_count": n, "exposure_s": e, "frame_rate_hz": fps})
+        if r is not None:
+            kinetic.on_kinetic_budget_reply(r["ram_estimate_bytes"], r["ram_free_bytes"])
+
+    kinetic.requestStartKinetic.connect(_start_kinetic)
+    kinetic.requestConfirmKinetic.connect(lambda: (safe_req("confirm_kinetic", {}), win.show_scrubber(False)))
+    kinetic.requestCancelKinetic.connect(lambda: safe_req("cancel_kinetic", {}))
+
+    def _save_stack():
+        dialog = KineticSaveDialog(
+            list_dir_callable=lambda sub: client.request("list_kinetic_save_dir", {"subdir": sub}),
+            default_subdir=cfg.get("kinetic_subdir", ""),
+            parent=win,
+        )
+        if dialog.exec():
+            rel = dialog.chosen_relative_path()
+            r = safe_req("save_kinetic_stack", {"path": rel}, timeout_ms=120_000)
+            if r is not None:
+                status_log.append(f"saved stack: {r['path']} ({r['bytes_written']} bytes)", "info")
+                cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
+
+    def _save_frame(index: int):
+        r = safe_req("get_kinetic_frame", {"index": index}, timeout_ms=30_000)
+        if r is None:
+            return
+        arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            win, "Save kinetic frame", f"{cfg.get('snapshot_dir', '.')}/marana_kf_{index:04d}.tif", "TIFF (*.tif)")
+        if not path:
+            return
+        md = build_snapshot_metadata(server_info, r["header"], extra={"kinetic_frame_index": index})
+        try:
+            write_snapshot(path, arr, md)
+            status_log.append(f"saved {path}", "info")
+        except Exception as e:
+            status_log.append(f"save failed: {e}", "error")
+
+    kinetic.requestSaveStack.connect(_save_stack)
+    kinetic.requestSaveFrame.connect(_save_frame)
+    kinetic.scrubber.valueChanged.connect(lambda v: _scrub_to(v))
+
+    def _scrub_to(idx: int):
+        r = safe_req("get_kinetic_frame", {"index": idx}, timeout_ms=10_000)
+        if r is None: return
+        arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
+        image_view.update_frame(arr)
+
+    # Side panels
+    cooling.requestSetCooling.connect(lambda enable, t: safe_req("cooling_set", {"enable": enable, "target_c": t}))
+    disp.requestRotation.connect(image_view.set_rotation)
+    disp.requestFlip.connect(image_view.set_flip)
+    contrast.requestContrast.connect(
+        lambda mode, mn, mx: image_view.set_contrast(ContrastMode(mode), manual_min=mn, manual_max=mx))
+
+    # Worker -> GUI updates
+    def _on_frame(topic: bytes, header: dict, arr: np.ndarray) -> None:
+        nonlocal latest_live_frame, latest_live_header
+        if topic == m.TOPIC_LIVE_FRAME:
+            latest_live_frame = arr
+            latest_live_header = header
+            image_view.update_frame(arr)
+        elif topic == m.TOPIC_KINETIC_FRAME:
+            image_view.update_frame(arr)
+
+    def _on_status(topic: bytes, header: dict) -> None:
+        if topic == m.TOPIC_TEMPERATURE:
+            win.set_temperature(header.get("sensor_temp_c", 0.0), header.get("status", "--"))
+            cooling.update_cooling(
+                header.get("enabled", False), header.get("target_c", 0.0),
+                header.get("sensor_temp_c", 0.0), header.get("status", "--"),
+            )
+        elif topic == m.TOPIC_KINETIC_PROGRESS:
+            kinetic.on_progress(header["frames_done"], header["frames_total"], header["achieved_fps"])
+        elif topic == m.TOPIC_KINETIC_COMPLETE:
+            kinetic.on_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
+            win.show_scrubber(header["frames_done"] > 0)
+            win.set_live_indicator(False)
+        elif topic == m.TOPIC_STATE:
+            status_log.append(f"state: {header.get('state')}", "info")
+            if header.get("state") == "LIVE":
+                win.set_live_indicator(True)
+            elif header.get("state") == "IDLE":
+                win.set_live_indicator(False)
+
+    worker.frameReady.connect(_on_frame)
+    worker.statusEvent.connect(_on_status)
+    worker.error.connect(lambda sev, msg: status_log.append(msg, sev))
+
+    win.show()
+    rc = app.exec()
+    worker.stop()
+    th.quit(); th.wait(2000)
+    client.close()
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
