@@ -45,6 +45,12 @@ class CameraWorker(threading.Thread):
         self._stop_evt = threading.Event()
         self._state = WorkerState.IDLE
         self._cancel_evt = threading.Event()
+        self._live_thread: threading.Thread | None = None
+        self._kinetic_thread: threading.Thread | None = None
+        self._kinetic_frames = None  # np.ndarray (N, H, W) or None
+        self._kinetic_pending_args: dict | None = None
+        self._kinetic_status: dict = {"frames_done": 0, "frames_total": 0, "achieved_fps": 0.0, "elapsed_s": 0.0}
+        self._frame_seq = 0
 
     # --- public API -------------------------------------------------------
 
@@ -102,7 +108,14 @@ class CameraWorker(threading.Thread):
         "list_features": "_h_list_features",
         "cooling_get": "_h_cooling_get",
         "cooling_set": "_h_cooling_set",
-        # Acquisition handlers (start_live, snap_single, kinetic, etc.) added in Task 11.
+        "start_live": "_h_start_live",
+        "stop": "_h_stop",
+        "snap_single": "_h_snap_single",
+        "start_kinetic": "_h_start_kinetic",
+        "confirm_kinetic": "_h_confirm_kinetic",
+        "cancel_kinetic": "_h_cancel_kinetic",
+        "get_kinetic_status": "_h_get_kinetic_status",
+        "get_kinetic_frame": "_h_get_kinetic_frame",
     }
 
     def _dispatch(self, cmd: str, args: dict, reply: _Reply | None) -> None:
@@ -189,3 +202,175 @@ class CameraWorker(threading.Thread):
         else:
             payload = {"type": type(exc).__name__, "message": str(exc), "severity": "error"}
         self._outq.put(m.make_status(m.TOPIC_ERROR, payload))
+
+    # --- live -------------------------------------------------------------
+
+    def _h_start_live(self, args: dict) -> dict:
+        if self._state != WorkerState.IDLE:
+            self._cancel_evt.set()
+            self._join_active(timeout=2.0)
+        self._cancel_evt.clear()
+        exposure = args.get("exposure_s")
+        self._set_state(WorkerState.LIVE)
+        self._live_thread = threading.Thread(
+            target=self._live_loop, args=(exposure,), name="LiveLoop", daemon=True
+        )
+        self._live_thread.start()
+        return {}
+
+    def _h_stop(self, args: dict) -> dict:
+        self._cancel_evt.set()
+        self._join_active(timeout=2.0)
+        self._set_state(WorkerState.IDLE)
+        return {}
+
+    def _join_active(self, timeout: float) -> None:
+        for t in (self._live_thread, self._kinetic_thread):
+            if t and t.is_alive():
+                t.join(timeout=timeout)
+        self._live_thread = None
+        self._kinetic_thread = None
+
+    def _live_loop(self, exposure_s: float | None) -> None:
+        try:
+            it = self._camera.safe_continuous_iter(exposure_s=exposure_s)
+            for frame in it:
+                if self._cancel_evt.is_set():
+                    it.close()
+                    break
+                self._publish_live_frame(frame)
+                # Cooling poll piggy-backs on live cadence
+                try:
+                    cooling = self._camera.get_cooling()
+                    self._publish_temperature(cooling)
+                except Exception:
+                    pass
+        except Exception as e:
+            log.exception("live loop error")
+            self._publish_error(e)
+            self._set_state(WorkerState.ERROR)
+
+    def _publish_live_frame(self, frame) -> None:
+        self._frame_seq += 1
+        header = {
+            "seq": self._frame_seq,
+            "ts_iso": _now_iso(),
+            "width": int(frame.shape[1]),
+            "height": int(frame.shape[0]),
+            "dtype": "uint16",
+        }
+        self._outq.put(m.make_frame(m.TOPIC_LIVE_FRAME, header, frame.tobytes()))
+
+    # --- snapshot ---------------------------------------------------------
+
+    def _h_snap_single(self, args: dict) -> dict:
+        prev_state = self._state
+        live_was_running = prev_state == WorkerState.LIVE
+        if live_was_running:
+            self._cancel_evt.set()
+            self._join_active(timeout=2.0)
+        self._cancel_evt.clear()
+        self._set_state(WorkerState.SINGLE)
+        try:
+            frame = self._camera.single_shot(timeout_ms=int(2000 + 1000 * args.get("exposure_s", 0.05)))
+            header = {
+                "ts_iso": _now_iso(),
+                "width": int(frame.shape[1]),
+                "height": int(frame.shape[0]),
+                "dtype": "uint16",
+            }
+            result = {"frame_bytes": bytes(frame.tobytes()), "header": header}
+        finally:
+            self._set_state(WorkerState.IDLE)
+            if live_was_running:
+                self._h_start_live({"exposure_s": args.get("exposure_s")})
+        return result
+
+    # --- kinetic ----------------------------------------------------------
+
+    def _h_start_kinetic(self, args: dict) -> dict:
+        frame_count = int(args["frame_count"])
+        exposure_s = float(args["exposure_s"])
+        frame_rate_hz = float(args["frame_rate_hz"])
+        aoi = self._camera.get_aoi()
+        w = aoi[1] - aoi[0] + 1
+        h = aoi[3] - aoi[2] + 1
+        ram_estimate = frame_count * w * h * 2
+        try:
+            import psutil
+            ram_free = psutil.virtual_memory().available
+        except Exception:
+            ram_free = 0
+        self._kinetic_pending_args = {
+            "frame_count": frame_count,
+            "exposure_s": exposure_s,
+            "frame_rate_hz": frame_rate_hz,
+        }
+        return {"ram_estimate_bytes": ram_estimate, "ram_free_bytes": int(ram_free)}
+
+    def _h_confirm_kinetic(self, args: dict) -> dict:
+        if self._kinetic_pending_args is None:
+            raise ValueError("no kinetic pending; call start_kinetic first")
+        k = self._kinetic_pending_args
+        self._kinetic_pending_args = None
+        self._cancel_evt.clear()
+        self._set_state(WorkerState.KINETIC)
+        self._kinetic_thread = threading.Thread(
+            target=self._kinetic_loop, args=(k,), name="KineticLoop", daemon=True,
+        )
+        self._kinetic_thread.start()
+        return {}
+
+    def _h_cancel_kinetic(self, args: dict) -> dict:
+        self._cancel_evt.set()
+        self._join_active(timeout=10.0)
+        return {}
+
+    def _h_get_kinetic_status(self, args: dict) -> dict:
+        return dict(self._kinetic_status)
+
+    def _h_get_kinetic_frame(self, args: dict) -> dict:
+        idx = int(args["index"])
+        if self._kinetic_frames is None:
+            raise ValueError("no kinetic frames buffered")
+        if not (0 <= idx < self._kinetic_frames.shape[0]):
+            raise IndexError(f"frame index {idx} out of range")
+        f = self._kinetic_frames[idx]
+        header = {
+            "index": idx,
+            "width": int(f.shape[1]),
+            "height": int(f.shape[0]),
+            "dtype": "uint16",
+        }
+        return {"frame_bytes": bytes(f.tobytes()), "header": header}
+
+    def _kinetic_loop(self, k: dict) -> None:
+        def on_progress(done, total, fps):
+            elapsed = self._kinetic_status.get("elapsed_s", 0.0)
+            self._kinetic_status = {
+                "frames_done": done, "frames_total": total,
+                "achieved_fps": fps, "elapsed_s": elapsed,
+            }
+            self._outq.put(m.make_status(m.TOPIC_KINETIC_PROGRESS, self._kinetic_status))
+        try:
+            frames, done, elapsed = self._camera.kinetic_burst(
+                frame_count=k["frame_count"], exposure_s=k["exposure_s"],
+                frame_rate_hz=k["frame_rate_hz"],
+                on_progress=on_progress, stop_flag=self._cancel_evt,
+            )
+            self._kinetic_frames = frames
+            partial = done < k["frame_count"]
+            self._kinetic_status = {
+                "frames_done": done, "frames_total": k["frame_count"],
+                "achieved_fps": done / elapsed if elapsed > 0 else 0.0,
+                "elapsed_s": elapsed,
+            }
+            self._outq.put(m.make_status(m.TOPIC_KINETIC_COMPLETE, {
+                **self._kinetic_status, "partial": partial,
+            }))
+        except Exception as e:
+            log.exception("kinetic loop error")
+            self._publish_error(e)
+            self._set_state(WorkerState.ERROR)
+            return
+        self._set_state(WorkerState.IDLE)

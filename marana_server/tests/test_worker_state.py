@@ -1,6 +1,8 @@
+import time
 from queue import Queue
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from marana_server.worker import CameraWorker, WorkerState
@@ -54,3 +56,60 @@ def test_set_feature_dispatches_to_camera(worker):
     w, cam, _ = worker
     w.submit_sync("set_feature", {"name": "ExposureTime", "value": 0.1})
     cam.set_feature.assert_called_with("ExposureTime", 0.1)
+
+
+@pytest.fixture
+def cam_with_live():
+    cam = MagicMock()
+    cam.get_cooling.return_value = {
+        "enabled": False, "target_c": 0.0, "sensor_temp_c": 20.0, "status": "Cooler Off",
+    }
+    cam.get_feature.return_value = 0.05
+
+    # Yield 3 frames from safe_continuous_iter then stop on close()
+    def gen(*a, **kw):
+        for i in range(3):
+            yield np.full((4, 4), i, dtype=np.uint16)
+    cam.safe_continuous_iter = MagicMock(side_effect=gen)
+
+    cam.get_aoi.return_value = (0, 3, 0, 3)
+    cam.single_shot = MagicMock(return_value=np.full((4, 4), 99, dtype=np.uint16))
+
+    return cam
+
+
+def test_start_live_publishes_frames(cam_with_live):
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    try:
+        w.submit_sync("start_live", {"exposure_s": 0.001})
+        time.sleep(0.5)
+        w.submit_sync("stop", {})
+        time.sleep(0.2)
+        events = _drain(outq)
+        frame_topics = [e for e in events if e[0] == m.TOPIC_LIVE_FRAME]
+        assert len(frame_topics) >= 1
+        state_events = [m.decode(e[1])["state"] for e in events if e[0] == m.TOPIC_STATE]
+        assert "LIVE" in state_events
+        assert "IDLE" in state_events
+    finally:
+        w.shutdown()
+        w.join(timeout=2.0)
+
+
+def test_snap_single_returns_frame(cam_with_live):
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    try:
+        result = w.submit_sync("snap_single", {})
+        assert "frame_bytes" in result
+        assert "header" in result
+        assert result["header"]["width"] == 4
+        assert result["header"]["height"] == 4
+        arr = np.frombuffer(result["frame_bytes"], dtype=np.uint16).reshape(4, 4)
+        assert int(arr[0, 0]) == 99
+    finally:
+        w.shutdown()
+        w.join(timeout=2.0)
