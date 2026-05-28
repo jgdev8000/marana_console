@@ -144,7 +144,9 @@ class MaranaService(threading.Thread):
 
     def _resolve_under_captures(self, path: str) -> Path:
         p = (self._captures_dir / path).resolve()
-        if not str(p).startswith(str(self._captures_dir)):
+        # Use Path.is_relative_to to avoid the prefix-string trap where
+        # /tmp/foobar would falsely pass startswith(/tmp/foo).
+        if p != self._captures_dir and not p.is_relative_to(self._captures_dir):
             raise PermissionError(f"path escapes captures dir: {path}")
         return p
 
