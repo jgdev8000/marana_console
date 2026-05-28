@@ -1,0 +1,33 @@
+[project]
+name = "marana-console"
+version = "0.1.0"
+description = "Andor Marana-X camera server + PyQt6 GUI client"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "tifffile>=2024.1",
+    "pyzmq>=25.0",
+    "msgpack>=1.0",
+]
+
+[project.optional-dependencies]
+server = []  # pyAndorSDK3 installed separately from the SDK tarball; see README
+client = [
+    "PyQt6>=6.6",
+    "pyqtgraph>=0.13",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.2",
+]
+
+[project.scripts]
+marana-server = "marana_server.__main__:main"
+marana-client = "marana_client.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["marana_proto*", "marana_server*", "marana_client*"]
