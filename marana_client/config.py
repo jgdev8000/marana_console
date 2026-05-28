@@ -16,7 +16,7 @@ _DEFAULTS = {
     "contrast_mode": "percentile",
     "manual_min": 0,
     "manual_max": 65535,
-    "rotation": 0,
+    "rot": 0,
     "flip_h": False,
     "flip_v": False,
 }
