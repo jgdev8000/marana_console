@@ -104,3 +104,72 @@ class MaranaCamera:
     @property
     def sensor_height(self) -> int:
         return int(self._require().SensorHeight)
+
+    # --- feature access ---------------------------------------------------
+
+    def _translate_sdk_error(self, exc: Exception, feature: str | None = None) -> Exception:
+        from marana_proto.errors import FeatureNotWritable, FeatureValueOutOfRange
+        import pyAndorSDK3
+        msg = str(exc)
+        if isinstance(exc, pyAndorSDK3.CameraException) or isinstance(exc, pyAndorSDK3.ATCoreException):
+            text = msg.upper()
+            if "NOTWRITABLE" in text or "NOT WRITABLE" in text or "READ ONLY" in text:
+                return FeatureNotWritable(f"{feature}: {msg}" if feature else msg)
+            if "OUTOFRANGE" in text or "OUT OF RANGE" in text or "INDEXNOTAVAILABLE" in text or "STRINGNOTAVAILABLE" in text:
+                return FeatureValueOutOfRange(f"{feature}: {msg}" if feature else msg)
+        return exc
+
+    def get_feature(self, name: str):
+        cam = self._require()
+        try:
+            return getattr(cam, name)
+        except Exception as e:
+            raise self._translate_sdk_error(e, name) from e
+
+    def set_feature(self, name: str, value) -> None:
+        cam = self._require()
+        try:
+            setattr(cam, name, value)
+        except Exception as e:
+            raise self._translate_sdk_error(e, name) from e
+
+    def enum_options(self, name: str) -> list[str]:
+        """List the available enum string options for a feature.
+        Raises if the feature isn't an enum."""
+        cam = self._require()
+        try:
+            # pyAndorSDK3's ATCore exposes get_enumerated_string_options
+            return list(cam._lib.get_enumerated_string_options(cam._handle, name))
+        except Exception as e:
+            raise self._translate_sdk_error(e, name) from e
+
+    # --- AOI --------------------------------------------------------------
+
+    def set_aoi(self, x0: int, x1: int, y0: int, y1: int) -> None:
+        from marana_proto.errors import FeatureValueOutOfRange
+        if not (0 <= x0 <= x1 < self.sensor_width and 0 <= y0 <= y1 < self.sensor_height):
+            raise FeatureValueOutOfRange(
+                f"AOI ({x0},{x1},{y0},{y1}) out of sensor "
+                f"({self.sensor_width}x{self.sensor_height})"
+            )
+        width = x1 - x0 + 1
+        height = y1 - y0 + 1
+        cam = self._require()
+        try:
+            cam.AOIWidth = width
+            cam.AOIHeight = height
+            cam.AOILeft = x0 + 1     # SDK is 1-based
+            cam.AOITop = y0 + 1
+        except Exception as e:
+            raise self._translate_sdk_error(e, "AOI") from e
+
+    def get_aoi(self) -> tuple[int, int, int, int]:
+        cam = self._require()
+        left = int(cam.AOILeft) - 1   # to 0-based
+        top = int(cam.AOITop) - 1
+        width = int(cam.AOIWidth)
+        height = int(cam.AOIHeight)
+        return (left, left + width - 1, top, top + height - 1)
+
+    def set_aoi_full(self) -> None:
+        self.set_aoi(0, self.sensor_width - 1, 0, self.sensor_height - 1)
