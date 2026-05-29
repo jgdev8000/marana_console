@@ -311,6 +311,14 @@ class CameraWorker(threading.Thread):
     def _h_confirm_kinetic(self, args: dict) -> dict:
         if self._kinetic_pending_args is None:
             raise ValueError("no kinetic pending; call start_kinetic first")
+        # Matches the BL11.3.2 ICE server contract: caller must stop any
+        # in-flight acquisition before starting a new one. Two SDK threads
+        # racing on the same camera handle produce AT_ERR_TIMEDOUT after a
+        # handful of frames.
+        if self._state != WorkerState.IDLE:
+            raise RuntimeError(
+                f"Must call stop first; current state is {self._state.value}"
+            )
         k = self._kinetic_pending_args
         self._kinetic_pending_args = None
         self._cancel_evt.clear()

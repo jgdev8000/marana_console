@@ -113,3 +113,24 @@ def test_snap_single_returns_frame(cam_with_live):
     finally:
         w.shutdown()
         w.join(timeout=2.0)
+
+
+def test_confirm_kinetic_rejects_when_live_running(cam_with_live):
+    """Regression: starting kinetic while LIVE is running used to silently race the
+    SDK and abort after a handful of frames. Server must now reject so the client
+    is forced to call stop() first (matches the BL11.3.2 ICE server contract).
+    """
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    try:
+        w.submit_sync("start_live", {"exposure_s": 0.001})
+        time.sleep(0.2)
+        # start_kinetic only computes the RAM budget — allowed in any state
+        w.submit_sync("start_kinetic", {"frame_count": 5, "exposure_s": 0.001, "frame_rate_hz": 5.0})
+        # confirm_kinetic must reject because state != IDLE
+        with pytest.raises(RuntimeError, match="stop first"):
+            w.submit_sync("confirm_kinetic", {})
+    finally:
+        w.shutdown()
+        w.join(timeout=2.0)

@@ -185,8 +185,11 @@ def main(argv=None) -> int:
     live.requestSnapNow.connect(_snap_now)
     live.requestAcquireAndSave.connect(_acquire_and_save)
 
-    # Kinetic flow
+    # Kinetic flow — must call `stop` first so the server isn't already in LIVE
+    # (the ICE server's contract; concurrent SDK threads cause AT_ERR_TIMEDOUT).
     def _start_kinetic(n, e, fps):
+        safe_req("stop", {})            # no-op if IDLE
+        win.set_live_indicator(False)
         r = safe_req("start_kinetic", {"frame_count": n, "exposure_s": e, "frame_rate_hz": fps})
         if r is not None:
             kinetic.on_kinetic_budget_reply(r["ram_estimate_bytes"], r["ram_free_bytes"])
