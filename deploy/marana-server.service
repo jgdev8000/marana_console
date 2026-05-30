@@ -10,6 +10,10 @@ User=andor
 Group=andor
 WorkingDirectory=/opt/marana/marana_console
 Environment="PATH=/opt/marana/venv/bin:/usr/bin"
+Environment="EPICS_CA_AUTO_ADDR_LIST=YES"
+# Optional explicit broadcast (uncomment + set for your subnet if auto-discovery
+# isn't picking up the IOC):
+#Environment="EPICS_CA_ADDR_LIST=192.168.1.255"
 ExecStart=/opt/marana/venv/bin/python -m marana_server \
   --bind 0.0.0.0 \
   --ctrl-port 5555 \

@@ -141,3 +141,51 @@ See `docs/superpowers/plans/2026-05-28-andor-marana-ui.md` for the full file tre
 - **`pyAndorSDK3` import fails** — SDK libraries not on the linker path. The installer copies them to `/usr/local/lib`; run `sudo ldconfig` after installation.
 - **PyQt6 import fails with `libGL.so.1: cannot open shared object file`** — install the system Qt dependencies listed above.
 - **SimCam quirks** — the SDK simulator has a fixed 2560×2160 sensor, no writable AOI, and doesn't support Mono16 encoding. These limitations don't apply to the real Marana.
+
+## Run with the virtual MCS2 IOC (sim mode)
+
+For developing or demoing the through-focus series without the real motor
+controller, spin up the bundled sim IOC:
+
+```bash
+./deploy/sim/start-mcs2-sim.sh
+```
+
+This exposes `MCS2SIM:mask_{x,y,z}` and `MCS2SIM:zoneplate_{x,y,z}` with limits
+matching the real beamline IOC. The prefix is `MCS2SIM:` (distinct from the real
+`MCS2:`) so the two can coexist on the same broadcast domain.
+
+## Through-focus series
+
+The FOCUS tab steps Mask Z across a range, snapping a frame at each stop, and
+saves the result as a multi-page TIFF stack on the Linux box.
+
+- **Motor source toggle** (top of the FOCUS tab): Sim (`MCS2SIM:mask_z`) or
+  Real (`MCS2:mask_z`). Defaults to Sim so a fresh launch can't move real hardware.
+- **Range / Step** are in µm; the motor record is in mm (converted server-side).
+- **Stops** = `floor(range / step) + 1`, shown live.
+- Limits are validated server-side against the motor's `.DHLM`/`.DLLM`.
+
+### Through-focus checklist
+
+1. **Sim setup:**
+   - Server: `python -m marana_server --sim --bind 0.0.0.0`
+   - Motor IOC: `./deploy/sim/start-mcs2-sim.sh`
+   - Client: `python -m marana_client --host <linux-box>`
+2. **Smoke test** (FOCUS tab):
+   - Toggle is Sim by default; click ⟲ → Start Z shows `+0.000 µm`.
+   - Set range=100 µm, step=10 µm → Stops shows 11; Est. time updates.
+   - Click START → confirmation dialog with the plan → Yes.
+   - Progress bar advances; the central ImageView shows each captured frame.
+   - On Complete, Start Z returns to 0 if "Return to start" was checked.
+   - SAVE STACK → server-side directory dialog → save → status log shows the path.
+3. **Real motor** (only when ready):
+   - Toggle Real → ⟲ → Start Z updates to the live `MCS2:mask_z` RBV.
+   - Run a small series first (e.g. 20 µm / 5 µm) to confirm motion + framing.
+
+### EPICS reachability
+
+The server needs to reach the IOC over Channel Access. With
+`EPICS_CA_AUTO_ADDR_LIST=YES` (set in the systemd unit) it auto-discovers via the
+host's interface broadcasts. If the IOC is on a subnet that auto-discovery
+misses, set `EPICS_CA_ADDR_LIST` to the broadcast address explicitly.
