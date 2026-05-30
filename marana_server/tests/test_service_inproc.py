@@ -66,3 +66,42 @@ def test_unknown_command_returns_err(service):
     reply = _req(ctx, "inproc://test_ctrl", "does_not_exist", {})
     assert reply["ok"] is False
     assert "unknown" in reply["error"]["message"].lower()
+
+
+from unittest.mock import patch
+
+
+def test_read_motor_rbv(service):
+    """Mocks EpicsMover; verifies read_motor_rbv replies with expected fields."""
+    svc, ctx = service
+    fake = MagicMock()
+    fake.read_rbv_mm.return_value = 0.001234   # 1.234 µm
+    fake.read_limits_mm.return_value = (-10.5, 10.5)
+    fake.egu.return_value = "mm"
+    with patch("marana_server.service.EpicsMover", return_value=fake):
+        reply = _req(ctx, "inproc://test_ctrl", "read_motor_rbv",
+                     {"mover_pv_base": "MCS2SIM:mask_z"})
+    assert reply["ok"] is True
+    assert reply["result"]["z_mm"] == pytest.approx(0.001234)
+    assert reply["result"]["z_um"] == pytest.approx(1.234)
+    assert reply["result"]["dllm_mm"] == pytest.approx(-10.5)
+    assert reply["result"]["dhlm_mm"] == pytest.approx(10.5)
+    assert reply["result"]["egu"] == "mm"
+
+
+def test_save_focus_stack_writes_tiff(service, tmp_path):
+    """Populate worker's _focus_frames + _focus_meta, then call save_focus_stack."""
+    import numpy as np
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    svc._worker._focus_frames = np.zeros((3, 8, 8), dtype=np.uint16)
+    svc._worker._focus_meta = {
+        "mover_pv_base": "MCS2SIM:mask_z", "z_start_um": 0.0,
+        "direction": 1, "range_um": 20.0, "step_um": 10.0,
+        "settle_ms": 50, "return_to_start": True, "returned_to_start": True,
+        "z_positions_um": [0.0, 10.0, 20.0], "achieved_elapsed_s": 1.5,
+    }
+    reply = _req(ctx, "inproc://test_ctrl", "save_focus_stack", {"path": "focus.tif"})
+    assert reply["ok"] is True
+    assert reply["result"]["frames_written"] == 3
+    assert (tmp_path / "focus.tif").exists()

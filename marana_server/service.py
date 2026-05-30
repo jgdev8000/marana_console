@@ -15,6 +15,7 @@ from marana_server.publisher import Publisher
 from marana_server.worker import CameraWorker
 from marana_server.io_tiff import write_image_stack
 from marana_server.meta import build_metadata
+from marana_server.epics_mover import EpicsMover
 
 log = logging.getLogger(__name__)
 
@@ -114,13 +115,18 @@ class MaranaService(threading.Thread):
             log.exception("dispatch %s failed", cmd)
             return m.make_reply_err(req_id, type(e).__name__, str(e))
 
-    INSTANT_CMDS = {"hello", "save_kinetic_stack", "list_kinetic_save_dir", "shutdown"}
+    INSTANT_CMDS = {"hello", "save_kinetic_stack", "save_focus_stack",
+                    "list_kinetic_save_dir", "read_motor_rbv", "shutdown"}
 
     def _dispatch(self, cmd: str, args: dict):
         if cmd == "hello":
             return self._cmd_hello()
         if cmd == "save_kinetic_stack":
             return self._cmd_save_kinetic(args)
+        if cmd == "save_focus_stack":
+            return self._cmd_save_focus_stack(args)
+        if cmd == "read_motor_rbv":
+            return self._cmd_read_motor_rbv(args)
         if cmd == "list_kinetic_save_dir":
             return self._cmd_list_save_dir(args)
         if cmd == "shutdown":
@@ -172,6 +178,51 @@ class MaranaService(threading.Thread):
                 "frame_count": int(frames.shape[0]),
                 "achieved_fps_hz": self._worker._kinetic_status.get("achieved_fps", 0.0),
                 "acquisition_time_s": self._worker._kinetic_status.get("elapsed_s", 0.0),
+            },
+        )
+        bytes_written = write_image_stack(str(target), frames, meta)
+        return {"path": str(target), "bytes_written": bytes_written, "frames_written": int(frames.shape[0])}
+
+    def _cmd_read_motor_rbv(self, args: dict) -> dict:
+        pv_base = args["mover_pv_base"]
+        mover = EpicsMover(pv_base)
+        try:
+            z_mm = mover.read_rbv_mm()
+            dllm_mm, dhlm_mm = mover.read_limits_mm()
+            egu = mover.egu()
+        finally:
+            mover.close()
+        return {
+            "z_mm": z_mm,
+            "z_um": z_mm * 1e3,
+            "dllm_mm": dllm_mm,
+            "dhlm_mm": dhlm_mm,
+            "egu": egu,
+        }
+
+    def _cmd_save_focus_stack(self, args: dict) -> dict:
+        if self._worker._focus_frames is None or len(self._worker._focus_frames) == 0:
+            raise ValueError("no focus frames buffered")
+        frames = self._worker._focus_frames
+        target = self._resolve_under_captures(args["path"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        cooling = self._cam.get_cooling()
+        aoi = self._cam.get_aoi()
+        focus_meta = dict(self._worker._focus_meta)
+        meta = build_metadata(
+            camera={"model": self._cam.model, "serial": self._cam.serial, "host": os.uname().nodename},
+            acquisition={
+                "mode": "focus_series",
+                "exposure_s": float(self._cam.get_feature("ExposureTime")),
+                "encoding": str(self._cam.get_feature("PixelEncoding")),
+                "speed_mhz": str(self._cam.get_feature("PixelReadoutRate")),
+                "shutter": str(self._cam.get_feature("ElectronicShutteringMode")),
+                "aoi_0based_inclusive": list(aoi),
+                "binning": [1, 1],
+                "sensor_temp_c": cooling.get("sensor_temp_c", 0.0),
+                "timestamp_iso": _now_iso(),
+                "frame_count": int(frames.shape[0]),
+                **focus_meta,
             },
         )
         bytes_written = write_image_stack(str(target), frames, meta)
