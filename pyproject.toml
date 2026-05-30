@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = []  # pyAndorSDK3 installed separately from the SDK tarball; see README
+server = ["pyepics>=3.5"]  # pyAndorSDK3 installed separately from the SDK tarball; see README
 client = [
     "PyQt6>=6.6",
     "pyqtgraph>=0.13",
