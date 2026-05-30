@@ -19,6 +19,7 @@ from marana_client.ui.image_view import MaranaImageView, ContrastMode
 from marana_client.ui.kinetic_panel import KineticPanel
 from marana_client.ui.kinetic_save_dialog import KineticSaveDialog
 from marana_client.ui.live_panel import LivePanel
+from marana_client.ui.focus_panel import FocusPanel
 from marana_client.ui.main_window import MainWindow
 from marana_client.ui.side_panels import (
     CoolingPanel, DisplayPanel, ContrastPanel, StatusLog,
@@ -57,8 +58,8 @@ def main(argv=None) -> int:
     win = MainWindow(host=args.host)
     image_view = MaranaImageView()
     win.install_image_view(image_view)
-    live = LivePanel(); kinetic = KineticPanel()
-    win.install_left_panels(live, kinetic)
+    live = LivePanel(); kinetic = KineticPanel(); focus = FocusPanel()
+    win.install_left_panels(live, kinetic, focus)
     cooling = CoolingPanel(); disp = DisplayPanel(); contrast = ContrastPanel(); status_log = StatusLog()
     win.install_right_panels(cooling, disp, contrast, status_log)
 
@@ -111,6 +112,14 @@ def main(argv=None) -> int:
         kinetic.set_aoi_for_estimate(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
     except Exception as e:
         status_log.append(f"AOI initial read failed: {e}", "warn")
+
+    # Focus panel initial state
+    focus.apply_persisted_state(cfg)
+    try:
+        rbv = client.request("read_motor_rbv", {"mover_pv_base": focus.mover_pv_base()})
+        focus.set_start_z_um(rbv["z_um"], dllm_um=rbv["dllm_mm"] * 1e3, dhlm_um=rbv["dhlm_mm"] * 1e3)
+    except Exception as e:
+        status_log.append(f"focus initial Z read failed: {e}", "warn")
 
     # --- Wire signals -> client REQs ---
     def safe_req(cmd: str, args_: dict | None = None, timeout_ms: int | None = None):
@@ -237,6 +246,51 @@ def main(argv=None) -> int:
         arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
         image_view.update_frame(arr)
 
+    # --- Focus flow ---
+    def _start_focus(params: dict):
+        safe_req("stop", {})          # ICE pattern: ensure IDLE
+        win.set_live_indicator(False)
+        plan = safe_req("start_focus", params)
+        if plan is not None:
+            focus.on_plan_reply(plan)
+        cfg["focus_direction"] = int(params["direction"])
+        cfg["focus_range_um"] = float(params["range_um"])
+        cfg["focus_step_um"] = float(params["step_um"])
+        cfg["focus_exposure_s"] = float(params["exposure_s"])
+        cfg["focus_settle_ms"] = int(params["settle_ms"])
+        cfg["focus_return_to_start"] = bool(params["return_to_start"])
+        cfg_mod.save(cfg)
+
+    def _refresh_start_z(mover_pv_base: str):
+        rbv = safe_req("read_motor_rbv", {"mover_pv_base": mover_pv_base})
+        if rbv is not None:
+            focus.set_start_z_um(rbv["z_um"], dllm_um=rbv["dllm_mm"] * 1e3, dhlm_um=rbv["dhlm_mm"] * 1e3)
+
+    def _persist_mover_source(src: str):
+        cfg["mover_source"] = src
+        cfg_mod.save(cfg)
+
+    def _save_focus_stack():
+        dialog = KineticSaveDialog(
+            list_dir_callable=lambda sub: client.request("list_kinetic_save_dir", {"subdir": sub}),
+            default_subdir=cfg.get("kinetic_subdir", ""),
+            default_name="marana_focus.tif",
+            parent=win,
+        )
+        if dialog.exec():
+            rel = dialog.chosen_relative_path()
+            r = safe_req("save_focus_stack", {"path": rel}, timeout_ms=120_000)
+            if r is not None:
+                status_log.append(f"saved focus stack: {r['path']} ({r['bytes_written']} bytes)", "info")
+                cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
+
+    focus.requestStartFocus.connect(_start_focus)
+    focus.requestConfirmFocus.connect(lambda: safe_req("confirm_focus", {}))
+    focus.requestCancelFocus.connect(lambda: safe_req("cancel_focus", {}))
+    focus.requestSaveFocusStack.connect(_save_focus_stack)
+    focus.requestRefreshStartZ.connect(_refresh_start_z)
+    focus.requestSetMoverSource.connect(_persist_mover_source)
+
     # Side panels
     cooling.requestSetCooling.connect(lambda enable, t: safe_req("cooling_set", {"enable": enable, "target_c": t}))
     disp.requestRotation.connect(image_view.set_rotation)
@@ -253,6 +307,9 @@ def main(argv=None) -> int:
             image_view.update_frame(arr)
         elif topic == m.TOPIC_KINETIC_FRAME:
             image_view.update_frame(arr)
+        elif topic == m.TOPIC_FOCUS_PROGRESS:
+            image_view.update_frame(arr)
+            focus.on_focus_progress(header["frame_idx"], header["frames_total"], header["z_um"])
 
     def _on_status(topic: bytes, header: dict) -> None:
         if topic == m.TOPIC_TEMPERATURE:
@@ -266,6 +323,9 @@ def main(argv=None) -> int:
         elif topic == m.TOPIC_KINETIC_COMPLETE:
             kinetic.on_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
             win.show_scrubber(header["frames_done"] > 0)
+            win.set_live_indicator(False)
+        elif topic == m.TOPIC_FOCUS_COMPLETE:
+            focus.on_focus_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
             win.set_live_indicator(False)
         elif topic == m.TOPIC_STATE:
             status_log.append(f"state: {header.get('state')}", "info")
