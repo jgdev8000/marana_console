@@ -1,0 +1,11 @@
+file "/opt/epics/synApps/support/motor-R7-2-2/db/basic_asyn_motor.db"
+{
+pattern
+{P,        M,            DTYP,         PORT,       ADDR, DESC,         DIR, MRES,  PREC, DHLM, DLLM, VELO, VBAS, ACCL, BDST, BVEL, BACC, EGU, INIT}
+{MCS2SIM:, mask_x,       asynMotor,    motorSim1,  0,    wafer_x,      Pos, 1.e-6, 6,    25.5, -25.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+{MCS2SIM:, mask_y,       asynMotor,    motorSim1,  1,    wafer_y,      Pos, 1.e-6, 6,    10.5, -10.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+{MCS2SIM:, mask_z,       asynMotor,    motorSim1,  2,    wafer_z,      Pos, 1.e-6, 6,    10.5, -10.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+{MCS2SIM:, zoneplate_x,  asynMotor,    motorSim1,  3,    zoneplate_x,  Pos, 1.e-6, 6,    10.5, -10.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+{MCS2SIM:, zoneplate_y,  asynMotor,    motorSim1,  4,    zoneplate_y,  Pos, 1.e-6, 6,    10.5, -10.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+{MCS2SIM:, zoneplate_z,  asynMotor,    motorSim1,  5,    zoneplate_z,  Pos, 1.e-6, 6,    10.5, -10.5,  1,    .1,   .2,   0,    1,    .2,   mm,  ""}
+}

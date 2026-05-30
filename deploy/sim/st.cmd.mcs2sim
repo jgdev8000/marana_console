@@ -1,0 +1,22 @@
+#!../../bin/linux-x86_64/motorSim
+
+< envPaths
+
+cd "$(TOP)"
+dbLoadDatabase("dbd/motorSim.dbd")
+motorSim_registerRecordDeviceDriver(pdbbase)
+
+cd "$(TOP)/iocBoot/iocMotorSim"
+dbLoadTemplate("/home/cxrodev/marana_console/deploy/sim/mcs2sim.substitutions")
+
+## sim card: 6 axes, MRES 1e-6 → ±10.5 mm = ±10_500_000 motor steps
+motorSimCreate(0, 0, -25500000, 25500000, 0, 1, 6)
+drvAsynMotorConfigure("motorSim1", "motorSim", 0, 6)
+motorSimConfigAxis("motorSim1", 0, 25500000, -25500000, 0, 0)
+motorSimConfigAxis("motorSim1", 1, 10500000, -10500000, 0, 0)
+motorSimConfigAxis("motorSim1", 2, 10500000, -10500000, 0, 0)
+motorSimConfigAxis("motorSim1", 3, 10500000, -10500000, 0, 0)
+motorSimConfigAxis("motorSim1", 4, 10500000, -10500000, 0, 0)
+motorSimConfigAxis("motorSim1", 5, 10500000, -10500000, 0, 0)
+
+iocInit
