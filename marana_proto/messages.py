@@ -21,6 +21,8 @@ TOPIC_KINETIC_FRAME = b"kinetic_frame"
 TOPIC_TEMPERATURE = b"temperature"
 TOPIC_STATE = b"state"
 TOPIC_ERROR = b"error"
+TOPIC_FOCUS_PROGRESS = b"focus_progress"
+TOPIC_FOCUS_COMPLETE = b"focus_complete"
 
 
 def encode(obj: Any) -> bytes:

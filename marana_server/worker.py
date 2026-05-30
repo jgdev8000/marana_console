@@ -462,9 +462,138 @@ class CameraWorker(threading.Thread):
         return dict(self._focus_status)
 
     def _h_confirm_focus(self, args: dict) -> dict:
-        # Implemented in Task 5
-        raise NotImplementedError("confirm_focus implemented in Task 5")
+        if self._focus_pending_params is None:
+            raise ValueError("no focus pending; call start_focus first")
+        if self._state != WorkerState.IDLE:
+            raise RuntimeError(
+                f"Must call stop first; current state is {self._state.value}"
+            )
+        params = self._focus_pending_params
+        self._focus_pending_params = None
+        self._cancel_evt.clear()
+        self._set_state(WorkerState.FOCUS)
+        # Per-series mover handle; created on confirm so the loop owns it.
+        self._focus_mover = EpicsMover(params["mover_pv_base"])
+        self._focus_thread = threading.Thread(
+            target=self._focus_loop, args=(params,), name="FocusLoop", daemon=True,
+        )
+        self._focus_thread.start()
+        return {}
 
     def _h_cancel_focus(self, args: dict) -> dict:
-        # Implemented in Task 5
-        raise NotImplementedError("cancel_focus implemented in Task 5")
+        self._cancel_evt.set()
+        # Touch .STOP from the dispatch thread to interrupt wait_done blocking
+        # in the focus thread. Safe because pyepics PV.put is internally locked.
+        mover = self._focus_mover
+        if mover is not None:
+            try:
+                mover.stop()
+            except Exception as e:
+                log.warning("cancel_focus: mover.stop() failed: %s", e)
+        if self._focus_thread and self._focus_thread.is_alive():
+            self._focus_thread.join(timeout=15.0)
+        self._focus_thread = None
+        return {}
+
+    def _focus_loop(self, params: dict) -> None:
+        import numpy as np
+        mover = self._focus_mover
+        try:
+            z_start_mm = params["z_start_mm"]
+            stop_count = params["stop_count"]
+            step_mm = params["step_um"] * 1e-3 * params["direction"]
+            settle_s = params["settle_ms"] / 1000.0
+            exposure_s = params["exposure_s"]
+            move_timeout_s = max(2.0, abs(params["range_um"]) * 1e-3 * 2.0 + 1.0)
+
+            # Configure camera once for single-shot at the requested exposure
+            self._camera._configure_single_frame_mode(exposure_s=exposure_s)
+            h = int(self._camera.get_feature("AOIHeight"))
+            w = int(self._camera.get_feature("AOIWidth"))
+            frames = np.zeros((stop_count, h, w), dtype=np.uint16)
+            z_positions_um: list[float] = []
+
+            t0 = time.monotonic()
+            done = 0
+            for i in range(stop_count):
+                if self._cancel_evt.is_set():
+                    break
+                target_mm = z_start_mm + i * step_mm
+                mover.move(target_mm)
+                try:
+                    mover.wait_done(timeout_s=move_timeout_s, settle_s=settle_s)
+                except Exception as e:
+                    self._publish_error(e)
+                    break
+                if self._cancel_evt.is_set():
+                    break
+                actual_mm = mover.read_rbv_mm()
+                frame = self._camera.single_shot(timeout_ms=int(2000 + 1000 * exposure_s))
+                frames[i] = frame
+                z_positions_um.append(actual_mm * 1e3)
+                done += 1
+                self._focus_status = {
+                    "frames_done": done, "frames_total": stop_count,
+                    "current_z_um": actual_mm * 1e3,
+                    "elapsed_s": time.monotonic() - t0,
+                }
+                self._publish_focus_frame(i, stop_count, actual_mm * 1e3, frame)
+
+            # Optional return to start (best-effort)
+            returned = False
+            if params["return_to_start"]:
+                try:
+                    mover.stop()
+                    mover.move(z_start_mm)
+                    mover.wait_done(timeout_s=10.0, settle_s=0.1)
+                    returned = True
+                except Exception as e:
+                    log.warning("return-to-start failed: %s", e)
+                    self._publish_error(e)
+
+            self._focus_frames = frames[:done]
+            self._focus_z_positions = z_positions_um
+            self._focus_meta = {
+                "mover_pv_base": params["mover_pv_base"],
+                "z_start_um": z_start_mm * 1e3,
+                "direction": params["direction"],
+                "range_um": params["range_um"],
+                "step_um": params["step_um"],
+                "settle_ms": params["settle_ms"],
+                "return_to_start": params["return_to_start"],
+                "returned_to_start": returned,
+                "z_positions_um": list(z_positions_um),
+                "achieved_elapsed_s": time.monotonic() - t0,
+            }
+            self._outq.put(m.make_status(m.TOPIC_FOCUS_COMPLETE, {
+                "frames_done": done, "frames_total": stop_count,
+                "partial": done < stop_count,
+                "z_positions_um": list(z_positions_um),
+                "z_start_um": z_start_mm * 1e3,
+                "returned_to_start": returned,
+                "elapsed_s": time.monotonic() - t0,
+            }))
+        except Exception as e:
+            log.exception("focus loop error")
+            self._publish_error(e)
+            self._set_state(WorkerState.ERROR)
+            return
+        finally:
+            try:
+                mover.close()
+            except Exception:
+                pass
+            self._focus_mover = None
+        self._set_state(WorkerState.IDLE)
+
+    def _publish_focus_frame(self, idx: int, total: int, z_um: float, frame) -> None:
+        header = {
+            "frame_idx": idx,
+            "frames_total": total,
+            "z_um": z_um,
+            "ts_iso": _now_iso(),
+            "width": int(frame.shape[1]),
+            "height": int(frame.shape[0]),
+            "dtype": "uint16",
+        }
+        self._outq.put(m.make_frame(m.TOPIC_FOCUS_PROGRESS, header, frame.tobytes()))

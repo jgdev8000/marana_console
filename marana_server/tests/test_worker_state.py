@@ -64,7 +64,13 @@ def cam_with_live():
     cam.get_cooling.return_value = {
         "enabled": False, "target_c": 0.0, "sensor_temp_c": 20.0, "status": "Cooler Off",
     }
-    cam.get_feature.return_value = 0.05
+    # AOIHeight/AOIWidth must be real ints (focus loop preallocates frames from them);
+    # everything else (e.g. ExposureTime) defaults to 0.05.
+    def _get_feature(name):
+        if name in ("AOIHeight", "AOIWidth"):
+            return 4
+        return 0.05
+    cam.get_feature.side_effect = _get_feature
 
     # Yield 3 frames from safe_continuous_iter then stop on close()
     def gen(*a, **kw):
@@ -191,3 +197,98 @@ def test_get_focus_status_returns_zero_initially(worker):
     result = w.submit_sync("get_focus_status", {})
     assert result["frames_done"] == 0
     assert result["frames_total"] == 0
+
+
+def test_confirm_focus_rejects_when_live_running(cam_with_live):
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    try:
+        w.submit_sync("start_live", {"exposure_s": 0.001})
+        time.sleep(0.2)
+        fake_mover = _mover_mock(z_start_mm=0.0)
+        with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
+            w.submit_sync("start_focus", {
+                "mover_pv_base": "MCS2SIM:mask_z",
+                "direction": 1, "range_um": 50.0, "step_um": 10.0,
+                "exposure_s": 0.001, "settle_ms": 0, "return_to_start": True,
+            })
+        with pytest.raises(RuntimeError, match="stop first"):
+            w.submit_sync("confirm_focus", {})
+    finally:
+        w.shutdown(); w.join(timeout=2.0)
+
+
+def test_focus_loop_steps_through_positions(cam_with_live):
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    fake_mover = _mover_mock(z_start_mm=0.0)
+    try:
+        with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
+            w.submit_sync("start_focus", {
+                "mover_pv_base": "MCS2SIM:mask_z",
+                "direction": 1, "range_um": 40.0, "step_um": 10.0,
+                "exposure_s": 0.001, "settle_ms": 0, "return_to_start": True,
+            })
+            w.submit_sync("confirm_focus", {})
+        complete_payload = None; t0 = time.monotonic()
+        progress_count = 0
+        while time.monotonic() - t0 < 5.0 and complete_payload is None:
+            try:
+                item = outq.get(timeout=0.1)
+                if not item:
+                    continue
+                if item[0] == m.TOPIC_FOCUS_PROGRESS:
+                    progress_count += 1
+                elif item[0] == m.TOPIC_FOCUS_COMPLETE:
+                    complete_payload = m.decode(item[1])
+            except Exception:
+                pass
+        assert complete_payload is not None
+        assert complete_payload["frames_total"] == 5  # 40/10 + 1
+        assert complete_payload["frames_done"] == 5
+        assert complete_payload["partial"] is False
+        assert len(complete_payload["z_positions_um"]) == 5
+        # Mover.move called 5 times (plan) + 1 (return to start) = 6
+        assert fake_mover.move.call_count == 6
+        assert progress_count == 5
+    finally:
+        w.shutdown(); w.join(timeout=2.0)
+
+
+def test_cancel_focus_stops_mover(cam_with_live):
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    fake_mover = _mover_mock(z_start_mm=0.0)
+    import threading as _threading
+    slow_evt = _threading.Event()
+
+    def slow_wait(timeout_s=0, settle_s=0):
+        slow_evt.wait(timeout=timeout_s if timeout_s else 5.0)
+    fake_mover.wait_done.side_effect = slow_wait
+    try:
+        with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
+            w.submit_sync("start_focus", {
+                "mover_pv_base": "MCS2SIM:mask_z",
+                "direction": 1, "range_um": 100.0, "step_um": 10.0,
+                "exposure_s": 0.001, "settle_ms": 0, "return_to_start": False,
+            })
+            w.submit_sync("confirm_focus", {})
+            time.sleep(0.2)
+            w.submit_sync("cancel_focus", {})
+        slow_evt.set()
+        complete_payload = None; t0 = time.monotonic()
+        while time.monotonic() - t0 < 3.0 and complete_payload is None:
+            try:
+                item = outq.get(timeout=0.1)
+                if item and item[0] == m.TOPIC_FOCUS_COMPLETE:
+                    complete_payload = m.decode(item[1])
+            except Exception:
+                pass
+        assert complete_payload is not None
+        assert complete_payload["partial"] is True
+        assert fake_mover.stop.called  # called by _h_cancel_focus
+    finally:
+        w.shutdown(); w.join(timeout=2.0)
