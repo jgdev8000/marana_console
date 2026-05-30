@@ -33,3 +33,21 @@ def test_config_round_trip(tmp_path, monkeypatch):
     cfg2 = config.load()
     assert cfg2["host"] == "linuxbox.example.com"
     assert cfg2["snapshot_dir"] == "/home/me/captures"
+
+
+def test_config_has_focus_defaults(tmp_path, monkeypatch):
+    from marana_client import config
+    monkeypatch.setattr(config, "_CONFIG_DIR", tmp_path / ".marana_console")
+    monkeypatch.setattr(config, "_CONFIG_PATH", tmp_path / ".marana_console" / "config.json")
+    cfg = config.load()
+    assert cfg["mover_source"] == "sim"
+    assert cfg["focus_direction"] == 1
+    assert cfg["focus_range_um"] == 100.0
+    assert cfg["focus_return_to_start"] is True
+    # Round-trip
+    cfg["mover_source"] = "real"
+    cfg["focus_range_um"] = 50.0
+    config.save(cfg)
+    cfg2 = config.load()
+    assert cfg2["mover_source"] == "real"
+    assert cfg2["focus_range_um"] == 50.0

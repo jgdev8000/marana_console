@@ -19,6 +19,13 @@ _DEFAULTS = {
     "rot": 0,
     "flip_h": False,
     "flip_v": False,
+    "mover_source": "sim",
+    "focus_direction": 1,
+    "focus_range_um": 100.0,
+    "focus_step_um": 5.0,
+    "focus_exposure_s": 0.05,
+    "focus_settle_ms": 100,
+    "focus_return_to_start": True,
 }
 
 
