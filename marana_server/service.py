@@ -13,7 +13,7 @@ from marana_proto import messages as m
 from marana_proto.errors import MaranaError, to_wire
 from marana_server.publisher import Publisher
 from marana_server.worker import CameraWorker
-from marana_server.io_tiff import write_kinetic_stack
+from marana_server.io_tiff import write_image_stack
 from marana_server.meta import build_metadata
 
 log = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ class MaranaService(threading.Thread):
                 "acquisition_time_s": self._worker._kinetic_status.get("elapsed_s", 0.0),
             },
         )
-        bytes_written = write_kinetic_stack(str(target), frames, meta)
+        bytes_written = write_image_stack(str(target), frames, meta)
         return {"path": str(target), "bytes_written": bytes_written, "frames_written": int(frames.shape[0])}
 
     def _cmd_list_save_dir(self, args: dict) -> dict:

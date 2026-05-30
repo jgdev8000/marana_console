@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from marana_server.meta import build_metadata
-from marana_server.io_tiff import write_kinetic_stack
+from marana_server.io_tiff import write_image_stack
 
 
 def test_build_metadata_shape():
@@ -22,11 +22,11 @@ def test_build_metadata_shape():
     assert md["acquisition"]["exposure_s"] == 0.05
 
 
-def test_write_kinetic_stack_round_trip(tmp_path):
+def test_write_image_stack_round_trip(tmp_path):
     arr = (np.arange(3 * 16 * 16, dtype=np.uint16) % 1000).reshape(3, 16, 16)
     md = {"frame_count": 3, "target_fps_hz": 10.0, "achieved_fps_hz": 9.8, "acquisition_time_s": 0.31}
     path = tmp_path / "stack.tif"
-    written = write_kinetic_stack(str(path), arr, md)
+    written = write_image_stack(str(path), arr, md)
     assert written > 0
 
     with tifffile.TiffFile(str(path)) as tf:
