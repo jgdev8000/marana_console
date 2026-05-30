@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from marana_proto import messages as m
 from marana_proto.errors import MaranaError, to_wire
+from marana_server.epics_mover import EpicsMover
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class WorkerState(str, enum.Enum):
     LIVE = "LIVE"
     SINGLE = "SINGLE"
     KINETIC = "KINETIC"
+    FOCUS = "FOCUS"
     RECONFIG = "RECONFIG"
     ERROR = "ERROR"
 
@@ -51,6 +53,13 @@ class CameraWorker(threading.Thread):
         self._kinetic_pending_args: dict | None = None
         self._kinetic_status: dict = {"frames_done": 0, "frames_total": 0, "achieved_fps": 0.0, "elapsed_s": 0.0}
         self._frame_seq = 0
+        self._focus_thread: threading.Thread | None = None
+        self._focus_mover = None
+        self._focus_frames = None
+        self._focus_z_positions: list[float] = []
+        self._focus_pending_params: dict | None = None
+        self._focus_status: dict = {"frames_done": 0, "frames_total": 0, "current_z_um": 0.0, "elapsed_s": 0.0}
+        self._focus_meta: dict = {}
 
     # --- public API -------------------------------------------------------
 
@@ -116,6 +125,10 @@ class CameraWorker(threading.Thread):
         "cancel_kinetic": "_h_cancel_kinetic",
         "get_kinetic_status": "_h_get_kinetic_status",
         "get_kinetic_frame": "_h_get_kinetic_frame",
+        "start_focus": "_h_start_focus",
+        "confirm_focus": "_h_confirm_focus",
+        "cancel_focus": "_h_cancel_focus",
+        "get_focus_status": "_h_get_focus_status",
     }
 
     def _dispatch(self, cmd: str, args: dict, reply: _Reply | None) -> None:
@@ -382,3 +395,76 @@ class CameraWorker(threading.Thread):
             self._set_state(WorkerState.ERROR)
             return
         self._set_state(WorkerState.IDLE)
+
+    # --- focus -----------------------------------------------------------
+
+    def _h_start_focus(self, args: dict) -> dict:
+        from marana_proto.errors import FeatureValueOutOfRange
+        mover_pv_base = str(args["mover_pv_base"])
+        direction = int(args["direction"])
+        range_um = float(args["range_um"])
+        step_um = float(args["step_um"])
+        exposure_s = float(args["exposure_s"])
+        settle_ms = int(args["settle_ms"])
+        return_to_start = bool(args["return_to_start"])
+        if direction not in (-1, 1):
+            raise ValueError(f"direction must be ±1, got {direction}")
+        if range_um <= 0:
+            raise ValueError("range_um must be > 0")
+        if step_um <= 0:
+            raise ValueError("step_um must be > 0")
+        if exposure_s <= 0 or exposure_s > 60:
+            raise ValueError("exposure_s must be in (0, 60]")
+
+        mover = EpicsMover(mover_pv_base)
+        try:
+            z_start_mm = mover.read_rbv_mm()
+            dllm_mm, dhlm_mm = mover.read_limits_mm()
+        finally:
+            mover.close()
+
+        step_mm = step_um * 1e-3 * direction
+        stop_count = int(range_um // step_um) + 1
+        z_end_mm = z_start_mm + (stop_count - 1) * step_mm
+        margin_mm = 1e-6
+        z_min_mm = min(z_start_mm, z_end_mm)
+        z_max_mm = max(z_start_mm, z_end_mm)
+        if z_min_mm < dllm_mm + margin_mm or z_max_mm > dhlm_mm - margin_mm:
+            raise FeatureValueOutOfRange(
+                f"Z range exceeds limits ({dllm_mm:.3f}..{dhlm_mm:.3f} mm); "
+                f"plan spans {z_min_mm:.3f}..{z_max_mm:.3f} mm"
+            )
+
+        per_step_s = max(0.02, abs(step_mm)) + settle_ms / 1000.0 + exposure_s + 0.05
+        est_time_s = stop_count * per_step_s
+
+        self._focus_pending_params = {
+            "mover_pv_base": mover_pv_base,
+            "direction": direction,
+            "range_um": range_um,
+            "step_um": step_um,
+            "exposure_s": exposure_s,
+            "settle_ms": settle_ms,
+            "return_to_start": return_to_start,
+            "z_start_mm": z_start_mm,
+            "stop_count": stop_count,
+        }
+        return {
+            "z_start_um": z_start_mm * 1e3,
+            "z_end_um": z_end_mm * 1e3,
+            "stop_count": stop_count,
+            "est_time_s": est_time_s,
+            "dllm_mm": dllm_mm,
+            "dhlm_mm": dhlm_mm,
+        }
+
+    def _h_get_focus_status(self, args: dict) -> dict:
+        return dict(self._focus_status)
+
+    def _h_confirm_focus(self, args: dict) -> dict:
+        # Implemented in Task 5
+        raise NotImplementedError("confirm_focus implemented in Task 5")
+
+    def _h_cancel_focus(self, args: dict) -> dict:
+        # Implemented in Task 5
+        raise NotImplementedError("cancel_focus implemented in Task 5")
