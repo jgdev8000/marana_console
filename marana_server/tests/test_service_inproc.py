@@ -105,3 +105,16 @@ def test_save_focus_stack_writes_tiff(service, tmp_path):
     assert reply["ok"] is True
     assert reply["result"]["frames_written"] == 3
     assert (tmp_path / "focus.tif").exists()
+
+
+def test_get_acq_settings_over_req(service):
+    svc, ctx = service
+    svc._cam.get_acq_settings.return_value = {
+        "options": {"PixelReadoutRate": ["100 MHz"], "PixelEncoding": ["Mono16"], "GainMode": []},
+        "values": {"PixelReadoutRate": "100 MHz", "PixelEncoding": "Mono16", "GainMode": None},
+        "readonly": {"bit_depth": None, "readout_time_s": None, "frame_rate_hz": 90.0, "max_frame_rate_hz": 90.0},
+    }
+    reply = _req(ctx, "inproc://test_ctrl", "get_acq_settings", {})
+    assert reply["ok"] is True
+    assert reply["result"]["options"]["PixelReadoutRate"] == ["100 MHz"]
+    assert reply["result"]["values"]["GainMode"] is None

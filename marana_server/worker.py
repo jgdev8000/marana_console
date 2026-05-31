@@ -115,6 +115,7 @@ class CameraWorker(threading.Thread):
         "get_feature": "_h_get_feature",
         "set_feature": "_h_set_feature",
         "list_features": "_h_list_features",
+        "get_acq_settings": "_h_get_acq_settings",
         "cooling_get": "_h_cooling_get",
         "cooling_set": "_h_cooling_set",
         "start_live": "_h_start_live",
@@ -187,6 +188,9 @@ class CameraWorker(threading.Thread):
             except Exception as e:
                 out.append({"name": n, "error": str(e)})
         return {"features": out}
+
+    def _h_get_acq_settings(self, args: dict) -> dict:
+        return self._camera.get_acq_settings()
 
     def _h_cooling_get(self, args: dict) -> dict:
         return self._camera.get_cooling()

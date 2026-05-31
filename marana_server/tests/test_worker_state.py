@@ -292,3 +292,12 @@ def test_cancel_focus_stops_mover(cam_with_live):
         assert fake_mover.stop.called  # called by _h_cancel_focus
     finally:
         w.shutdown(); w.join(timeout=2.0)
+
+
+def test_get_acq_settings_passthrough(worker):
+    w, cam, _ = worker
+    snap = {"options": {"GainMode": ["a", "b"]}, "values": {"GainMode": "a"}, "readonly": {"bit_depth": "16 Bit"}}
+    cam.get_acq_settings.return_value = snap
+    result = w.submit_sync("get_acq_settings", {})
+    assert result == snap
+    cam.get_acq_settings.assert_called_once()
