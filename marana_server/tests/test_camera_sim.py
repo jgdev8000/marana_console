@@ -173,3 +173,32 @@ def test_set_cooling_does_not_raise(sim_cam):
     # Sim may not actually cool, but the call shouldn't blow up.
     sim_cam.set_cooling(enable=True, target_c=-30.0)
     sim_cam.set_cooling(enable=False, target_c=-30.0)
+
+
+def test_available_enum_options_filters_unavailable(sim_cam):
+    # On the SimCam, PixelEncoding lists 8 entries but only Mono12/Mono12Packed are available.
+    avail = sim_cam.available_enum_options("PixelEncoding")
+    assert isinstance(avail, list)
+    assert "Mono12" in avail
+    assert "Mono16" not in avail  # marked unavailable on the sim
+    full = sim_cam.enum_options("PixelEncoding")
+    assert len(avail) < len(full)  # filtering actually removed some
+
+
+def test_get_acq_settings_shape(sim_cam):
+    s = sim_cam.get_acq_settings()
+    assert set(s) == {"options", "values", "readonly"}
+    for k in ("PixelReadoutRate", "PixelEncoding", "GainMode"):
+        assert k in s["options"] and isinstance(s["options"][k], list)
+        assert k in s["values"]
+    # SimCam lacks GainMode -> empty options, None value
+    assert s["options"]["GainMode"] == []
+    assert s["values"]["GainMode"] is None
+    # Available encodings are the filtered subset
+    assert "Mono16" not in s["options"]["PixelEncoding"]
+    # Read-only block
+    ro = s["readonly"]
+    assert set(ro) == {"bit_depth", "readout_time_s", "frame_rate_hz", "max_frame_rate_hz"}
+    assert ro["bit_depth"] is None       # not on sim
+    assert ro["readout_time_s"] is None  # not on sim
+    assert isinstance(ro["max_frame_rate_hz"], float) and ro["max_frame_rate_hz"] > 0

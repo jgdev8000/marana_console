@@ -102,6 +102,15 @@ def main(argv=None) -> int:
     live.populate_feature_options(opts)
     live.set_current_values(values)
 
+    # Authoritative speed/encoding/gain population (availability-filtered) + indicators.
+    def _refresh_acq_settings():
+        try:
+            snap = client.request("get_acq_settings", {})
+            live.populate_acq_settings(snap)
+        except Exception as e:
+            status_log.append(f"get_acq_settings failed: {e}", "warn")
+    _refresh_acq_settings()
+
     # AOI initial query
     try:
         x0 = client.request("get_feature", {"name": "AOILeft"})["value"] - 1
@@ -134,7 +143,15 @@ def main(argv=None) -> int:
             status_log.append(f"{cmd}: {e}", "error")
         return None
 
-    live.requestSetFeature.connect(lambda n, v: safe_req("set_feature", {"name": n, "value": v}))
+    # Coupled features whose change alters which options are available — repopulate after.
+    _COUPLED = {"PixelReadoutRate", "PixelEncoding", "GainMode"}
+
+    def _on_set_feature(name, value):
+        safe_req("set_feature", {"name": name, "value": value})
+        if name in _COUPLED:
+            _refresh_acq_settings()
+
+    live.requestSetFeature.connect(_on_set_feature)
     live.requestStartLive.connect(lambda: (safe_req("start_live", {}), win.set_live_indicator(True)))
     live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False)))
     live.requestSetAoiFull.connect(lambda: (

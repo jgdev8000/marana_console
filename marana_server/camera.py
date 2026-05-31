@@ -358,3 +358,55 @@ class MaranaCamera:
             cam.SensorCooling = bool(enable)
         except Exception:
             pass
+
+    # --- acquisition settings (speed / gain / encoding cluster) -----------
+
+    def available_enum_options(self, name: str) -> list[str]:
+        """Enum option strings whose index is currently available, per the SDK's
+        is_enumerated_index_available. Raises if the feature isn't an enum / absent."""
+        cam = self._require()
+        lib = cam._lib
+        h = cam._handle
+        count = lib.get_enumerated_count(h, name)
+        out: list[str] = []
+        for i in range(count):
+            try:
+                if lib.is_enumerated_index_available(h, name, i):
+                    out.append(lib.get_enumerated_string_by_index(h, name, i))
+            except Exception:
+                continue
+        return out
+
+    def get_acq_settings(self) -> dict:
+        """Snapshot of the speed/gain/encoding cluster plus read-only indicators.
+        Every field degrades to [] / None when the camera lacks the feature (SimCam)."""
+        def avail(name):
+            try:
+                return self.available_enum_options(name)
+            except Exception:
+                return []
+
+        def val(name):
+            try:
+                return self.get_feature(name)
+            except Exception:
+                return None
+
+        def fmax(name):
+            try:
+                cam = self._require()
+                return float(cam._lib.get_float_max(cam._handle, name))
+            except Exception:
+                return None
+
+        keys = ("PixelReadoutRate", "PixelEncoding", "GainMode")
+        return {
+            "options": {k: avail(k) for k in keys},
+            "values": {k: val(k) for k in keys},
+            "readonly": {
+                "bit_depth": val("BitDepth"),
+                "readout_time_s": val("ReadoutTime"),
+                "frame_rate_hz": val("FrameRate"),
+                "max_frame_rate_hz": fmax("FrameRate"),
+            },
+        }
