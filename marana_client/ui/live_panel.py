@@ -59,6 +59,21 @@ class LivePanel(QtWidgets.QWidget):
         self.shutter_combo.currentTextChanged.connect(
             lambda v: self.requestSetFeature.emit("ElectronicShutteringMode", v))
         modes_grid.addWidget(self.shutter_combo, 2, 1)
+
+        # GainMode — the 12-bit-fast vs 16-bit-HDR control. Hidden on cameras
+        # (e.g. SimCam) that don't expose it.
+        self.gain_label = QtWidgets.QLabel("Gain:")
+        modes_grid.addWidget(self.gain_label, 3, 0)
+        self.gain_combo = QtWidgets.QComboBox()
+        self.gain_combo.currentTextChanged.connect(
+            lambda v: self.requestSetFeature.emit("GainMode", v))
+        modes_grid.addWidget(self.gain_combo, 3, 1)
+
+        # Read-only indicators (bit depth / readout time / max FPS)
+        self.indicators_label = QtWidgets.QLabel("")
+        self.indicators_label.setStyleSheet("color: #94a3b8;")
+        self.indicators_label.setWordWrap(True)
+        modes_card.layout().addWidget(self.indicators_label)
         outer.addWidget(modes_card)
 
         # AOI card
@@ -139,6 +154,42 @@ class LivePanel(QtWidgets.QWidget):
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
                 combo.blockSignals(False)
+
+    def populate_acq_settings(self, snapshot: dict) -> None:
+        """Authoritative (re)fill of the speed/encoding/gain combos from a
+        get_acq_settings snapshot: only AVAILABLE options are listed, current
+        values restored, read-only indicators updated. Signals blocked so a
+        repopulate never re-emits requestSetFeature."""
+        options = snapshot.get("options", {})
+        values = snapshot.get("values", {})
+        readonly = snapshot.get("readonly", {})
+        for combo, key in ((self.speed_combo, "PixelReadoutRate"),
+                           (self.encoding_combo, "PixelEncoding"),
+                           (self.gain_combo, "GainMode")):
+            combo.blockSignals(True)
+            combo.clear()
+            for opt in options.get(key, []) or []:
+                combo.addItem(opt)
+            cur = values.get(key)
+            if cur is not None:
+                idx = combo.findText(str(cur))
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+        # GainMode hides itself when the camera doesn't expose it (e.g. SimCam)
+        has_gain = bool(options.get("GainMode"))
+        self.gain_label.setVisible(has_gain)
+        self.gain_combo.setVisible(has_gain)
+        # Read-only indicators
+        parts = []
+        if readonly.get("bit_depth") is not None:
+            parts.append(f"BitDepth: {readonly['bit_depth']}")
+        if readonly.get("readout_time_s") is not None:
+            parts.append(f"Readout: {readonly['readout_time_s'] * 1e3:.1f} ms")
+        if readonly.get("max_frame_rate_hz") is not None:
+            parts.append(f"max FPS: {readonly['max_frame_rate_hz']:.1f}")
+        self.indicators_label.setText("   ".join(parts))
+        self.indicators_label.setVisible(bool(parts))
 
     def set_aoi_values(self, x0: int, x1: int, y0: int, y1: int) -> None:
         self.aoi_spins["L"].setValue(x0)
