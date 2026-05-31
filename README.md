@@ -191,3 +191,31 @@ The server needs to reach the IOC over Channel Access. With
 `EPICS_CA_AUTO_ADDR_LIST=YES` (set in the systemd unit) it auto-discovers via the
 host's interface broadcasts. If the IOC is on a subnet that auto-discovery
 misses, set `EPICS_CA_ADDR_LIST` to the broadcast address explicitly.
+
+## Gain mode & acquisition settings (real camera)
+
+The LIVE tab's MODES card exposes **Speed** (`PixelReadoutRate`), **Encoding**
+(`PixelEncoding`), **Shutter**, and **Gain** (`GainMode`) — plus read-only
+**BitDepth / Readout time / max FPS** indicators. The Speed/Encoding/Gain combos
+list only the options that are *currently selectable*: they repopulate after any
+change, so the SDK's interdependencies are enforced (you can't pick an invalid
+combination).
+
+On the Marana-4BV11/4BU11 family:
+- `PixelReadoutRate`: 100 MHz, 200 MHz
+- `GainMode`: "Fastest frame rate (12-bit)", "High dynamic range (16-bit)"
+- `PixelEncoding`: Mono12 / Mono12Packed / Mono16
+
+To get true 16-bit HDR, set **Gain = High dynamic range (16-bit)** — the Encoding
+combo then offers Mono16 and BitDepth reads "16 Bit". Selecting "Fastest frame
+rate (12-bit)" drops Mono16 from the list.
+
+The SimCam doesn't implement GainMode/BitDepth/ReadoutTime, so the Gain combo and
+those indicators hide themselves in sim mode (the availability filtering still
+works on Encoding — Mono16 is unavailable on the sim).
+
+### Manual check (real camera)
+1. Speed combo lists **100 MHz / 200 MHz**.
+2. Gain combo lists the two gain modes; selecting **High dynamic range (16-bit)**
+   makes **Mono16** appear in Encoding and BitDepth read **16 Bit**.
+3. Selecting **Fastest frame rate (12-bit)** removes Mono16 from Encoding.
