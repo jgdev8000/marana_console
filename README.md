@@ -43,7 +43,9 @@ python -m marana_client --host 127.0.0.1
    sudo udevadm control --reload-rules
    sudo udevadm trigger
    ```
-4. Install the Python wrapper:
+4. Install the Python wrapper (**version >= 1.24 required** — earlier versions
+   crash in `Camera.__init__` on the SimCam and on cameras without metadata
+   features; tested against 1.30.2 with core SDK 3.15.30175.0):
    ```bash
    pip install -e Python/pyAndorSDK3
    ```
