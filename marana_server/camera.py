@@ -11,38 +11,11 @@ from marana_proto.errors import CameraDisconnected
 
 log = logging.getLogger(__name__)
 
-
-def _install_pyandorsdk3_sim_patch() -> None:
-    """The SimCam returns AT_ERR_NOTIMPLEMENTED for is_readable(MetadataEnable),
-    which crashes pyAndorSDK3.Camera.__init__. Patch __populate_config to tolerate it.
-    No-op on cameras that do implement MetadataEnable (e.g. real Marana)."""
-    try:
-        from pyAndorSDK3.andor_camera import Camera
-        from pyAndorSDK3.andor_sdk3_exceptions import ATCoreException
-    except ImportError:
-        return
-    if getattr(Camera, "_marana_patched", False):
-        return
-    orig = Camera._Camera__populate_config
-
-    def patched(self, force=False):
-        try:
-            orig(self, force)
-        except ATCoreException as e:
-            if getattr(e, "err_code", None) != 2:  # AT_ERR_NOTIMPLEMENTED
-                raise
-        # Ensure keys downstream code expects exist with safe defaults,
-        # even when the camera didn't report them. pyAndorSDK3.Acquisition
-        # reads config['MetadataEnable'] when wait_buffer fires.
-        for k, default in (("MetadataEnable", False),):
-            if k not in self._Camera__current_config:
-                self._Camera__current_config[k] = default
-
-    Camera._Camera__populate_config = patched
-    Camera._marana_patched = True
-
-
-_install_pyandorsdk3_sim_patch()
+# Note: pyAndorSDK3 < 1.23 crashed in Camera.__init__ (__populate_config) on the
+# SimCam because is_readable("MetadataEnable") returned AT_ERR_NOTIMPLEMENTED, and
+# the wait_buffer/Acquisition path then KeyError'd on config["MetadataEnable"].
+# Both are fixed in wrapper >= 1.24 (the installed version is 1.30.2), so the
+# former monkey-patch has been removed. See ReleaseNotes for SDK 3.15.300114+.
 
 
 class MaranaCamera:
