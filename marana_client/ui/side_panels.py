@@ -83,13 +83,14 @@ class DisplayPanel(QtWidgets.QFrame):
 
 
 class ContrastPanel(QtWidgets.QFrame):
-    """Live black/white-point sliders. Dragging either updates the display
-    immediately (manual contrast). 'Auto' stretches to a percentile of the
-    current frame and moves the sliders there."""
-    requestLevels = QtCore.pyqtSignal(int, int)   # black, white
+    """Contrast = an auto baseline (set on live-start and each snap) plus two
+    fine offset sliders centered at the middle (0 = pure auto). Sliding or
+    arrowing pushes the black/white point relative to the auto result, live.
+    'Auto' re-stretches and re-centers the sliders."""
+    requestOffsets = QtCore.pyqtSignal(int, int)   # black %, white %  (-100..100)
     requestAuto = QtCore.pyqtSignal()
 
-    _MAXVAL = 65535
+    _RANGE = 100   # offset range: ±100% of the auto span
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,50 +100,47 @@ class ContrastPanel(QtWidgets.QFrame):
         t = QtWidgets.QLabel("CONTRAST"); t.setObjectName("cardTitle")
         lay.addWidget(t)
 
-        self.black_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.black_slider.setRange(0, self._MAXVAL)
-        self.black_slider.setValue(0)
-        self.white_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.white_slider.setRange(0, self._MAXVAL)
-        self.white_slider.setValue(self._MAXVAL)
-
-        self.black_label = QtWidgets.QLabel("Black: 0")
-        self.white_label = QtWidgets.QLabel(f"White: {self._MAXVAL}")
-        for w in (self.black_label, self.black_slider, self.white_label, self.white_slider):
-            lay.addWidget(w)
-
-        self.black_slider.valueChanged.connect(self._on_slider)
-        self.white_slider.valueChanged.connect(self._on_slider)
+        self.black_slider, self.black_label = self._make_row(lay, "Black")
+        self.white_slider, self.white_label = self._make_row(lay, "White")
+        self.black_slider.valueChanged.connect(self._on_change)
+        self.white_slider.valueChanged.connect(self._on_change)
 
         auto_btn = QtWidgets.QPushButton("Auto")
-        auto_btn.setToolTip("Stretch to 1–99.5% of the current frame")
+        auto_btn.setToolTip("Re-stretch to 1–99.5% of the current frame and re-center")
         auto_btn.clicked.connect(self.requestAuto.emit)
         lay.addWidget(auto_btn)
 
-    def _on_slider(self, _v: int) -> None:
+    def _make_row(self, parent_lay, name: str):
+        label = QtWidgets.QLabel(f"{name}: 0")
+        parent_lay.addWidget(label)
+        row = QtWidgets.QHBoxLayout()
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setRange(-self._RANGE, self._RANGE)
+        slider.setValue(0)                 # centered = pure auto
+        left = QtWidgets.QPushButton("◄"); left.setFixedWidth(28)
+        right = QtWidgets.QPushButton("►"); right.setFixedWidth(28)
+        left.setToolTip("nudge −1%"); right.setToolTip("nudge +1%")
+        left.clicked.connect(lambda: slider.setValue(slider.value() - 1))   # arrow = 1% fine step
+        right.clicked.connect(lambda: slider.setValue(slider.value() + 1))
+        row.addWidget(left); row.addWidget(slider, stretch=1); row.addWidget(right)
+        parent_lay.addLayout(row)
+        return slider, label
+
+    def _on_change(self, _v: int) -> None:
         black = self.black_slider.value()
         white = self.white_slider.value()
-        # Keep black strictly below white without fighting the user mid-drag.
-        if black >= white:
-            if self.sender() is self.black_slider:
-                white = min(self._MAXVAL, black + 1)
-                self.white_slider.blockSignals(True); self.white_slider.setValue(white); self.white_slider.blockSignals(False)
-            else:
-                black = max(0, white - 1)
-                self.black_slider.blockSignals(True); self.black_slider.setValue(black); self.black_slider.blockSignals(False)
-        self.black_label.setText(f"Black: {black}")
-        self.white_label.setText(f"White: {white}")
-        self.requestLevels.emit(black, white)
+        self.black_label.setText(f"Black: {black:+d}%")
+        self.white_label.setText(f"White: {white:+d}%")
+        self.requestOffsets.emit(black, white)
 
-    def set_levels(self, black: int, white: int) -> None:
-        """Sync slider positions (e.g. after Auto) without re-emitting."""
-        black = int(black); white = int(white)
-        for s, v in ((self.black_slider, black), (self.white_slider, white)):
+    def center(self) -> None:
+        """Reset both offset sliders to the middle (pure auto), no re-emit."""
+        for s in (self.black_slider, self.white_slider):
             s.blockSignals(True)
-            s.setValue(max(0, min(self._MAXVAL, v)))
+            s.setValue(0)
             s.blockSignals(False)
-        self.black_label.setText(f"Black: {black}")
-        self.white_label.setText(f"White: {white}")
+        self.black_label.setText("Black: +0%")
+        self.white_label.setText("White: +0%")
 
 
 class StatusLog(QtWidgets.QFrame):

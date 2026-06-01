@@ -74,6 +74,7 @@ def main(argv=None) -> int:
     server_info: dict = {}
     latest_live_header: dict = {}
     latest_live_frame: np.ndarray | None = None
+    pending_live_auto = {"v": False}   # auto-stretch once on the first frame after live starts
 
     # --- Hello + populate features ---
     try:
@@ -143,7 +144,11 @@ def main(argv=None) -> int:
             _refresh_acq_settings()   # Speed/Encoding/BitDepth indicators update
 
     live.requestSetFeature.connect(_on_set_feature)
-    live.requestStartLive.connect(lambda: (safe_req("start_live", {}), win.set_live_indicator(True)))
+    def _start_live():
+        pending_live_auto["v"] = True   # auto-stretch on the first live frame
+        safe_req("start_live", {})
+        win.set_live_indicator(True)
+    live.requestStartLive.connect(_start_live)
     live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False)))
     live.requestSetAoiFull.connect(lambda: (
         safe_req("set_feature", {"name": "AOIWidth", "value": server_info.get("sensor_w", 2048)}),
@@ -206,6 +211,7 @@ def main(argv=None) -> int:
             return
         arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
         image_view.update_frame(arr)
+        image_view.auto_baseline()   # auto-stretch on every snap (offsets persist)
         status_log.append("snapped frame (display only)", "info")
 
     live.requestSnapDisplay.connect(_snap_display)
@@ -313,8 +319,8 @@ def main(argv=None) -> int:
     cooling.requestSetCooling.connect(lambda enable, t: safe_req("cooling_set", {"enable": enable, "target_c": t}))
     disp.requestRotation.connect(image_view.set_rotation)
     disp.requestFlip.connect(image_view.set_flip)
-    contrast.requestLevels.connect(image_view.set_manual_levels)
-    contrast.requestAuto.connect(lambda: contrast.set_levels(*image_view.auto_stretch()))
+    contrast.requestOffsets.connect(image_view.set_level_offsets)
+    contrast.requestAuto.connect(lambda: (image_view.reset_auto(), contrast.center()))
 
     # Worker -> GUI updates
     def _on_frame(topic: bytes, header: dict, arr: np.ndarray) -> None:
@@ -323,6 +329,9 @@ def main(argv=None) -> int:
             latest_live_frame = arr
             latest_live_header = header
             image_view.update_frame(arr)
+            if pending_live_auto["v"]:
+                image_view.auto_baseline()   # auto-stretch once at start of live
+                pending_live_auto["v"] = False
         elif topic == m.TOPIC_KINETIC_FRAME:
             image_view.update_frame(arr)
         elif topic == m.TOPIC_FOCUS_PROGRESS:

@@ -1,7 +1,16 @@
-"""Image display widget — pyqtgraph ImageView wrapped with display transforms + contrast modes."""
+"""Image display widget — pyqtgraph ImageView wrapped with display transforms +
+an auto-baseline + offset contrast model.
+
+Contrast model:
+- An *auto baseline* (1–99.5% black/white) is established from a frame at trigger
+  points: once when live starts, and on each snapshot. It does NOT recompute every
+  live frame (that would make the view jump constantly).
+- Two *offsets* (black/white, as a percentage of the auto span) sit on top of the
+  baseline and persist frame-to-frame. The slider panel drives these live, so any
+  contrast tweak is applied relative to the auto result.
+"""
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass
 
 import numpy as np
@@ -9,23 +18,11 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
 
-class ContrastMode(str, enum.Enum):
-    AUTO = "auto"
-    PERCENTILE = "percentile"
-    MANUAL = "manual"
-    FREEZE = "freeze"
-
-
 @dataclass
 class DisplayState:
     rot: int = 0           # one of 0, 90, 180, 270
     flip_h: bool = False
     flip_v: bool = False
-    contrast: ContrastMode = ContrastMode.PERCENTILE
-    manual_min: int = 0
-    manual_max: int = 65535
-    percentile_lo: float = 1.0
-    percentile_hi: float = 99.5
 
 
 class MaranaImageView(QtWidgets.QWidget):
@@ -38,8 +35,13 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.menuBtn.hide()
         layout.addWidget(self.image_item)
         self.state = DisplayState()
-        self._last_levels: tuple[float, float] | None = None
-        self._last_raw: np.ndarray | None = None  # last frame, untransformed
+        self._last_raw: np.ndarray | None = None       # last frame, untransformed
+        self._auto_lo: float | None = None             # auto baseline black point
+        self._auto_hi: float | None = None             # auto baseline white point
+        self._black_off_pct: int = 0                   # offset, % of auto span
+        self._white_off_pct: int = 0
+
+    # --- display transforms ----------------------------------------------
 
     def set_rotation(self, deg: int) -> None:
         assert deg in (0, 90, 180, 270)
@@ -51,39 +53,51 @@ class MaranaImageView(QtWidgets.QWidget):
         self.state.flip_v = v
         self._rerender()
 
-    def set_contrast(self, mode: ContrastMode, manual_min: int = 0, manual_max: int = 65535,
-                     pct_lo: float = 1.0, pct_hi: float = 99.5) -> None:
-        self.state.contrast = mode
-        self.state.manual_min = manual_min
-        self.state.manual_max = manual_max
-        self.state.percentile_lo = pct_lo
-        self.state.percentile_hi = pct_hi
+    # --- contrast ---------------------------------------------------------
+
+    def set_level_offsets(self, black_pct: int, white_pct: int) -> None:
+        """Live black/white offsets (percent of the auto span), applied on top
+        of the current auto baseline."""
+        self._black_off_pct = int(black_pct)
+        self._white_off_pct = int(white_pct)
         self._rerender()
 
-    def set_manual_levels(self, lo: int, hi: int) -> None:
-        """Switch to manual contrast with explicit black/white points (live slider)."""
-        self.state.contrast = ContrastMode.MANUAL
-        self.state.manual_min = int(lo)
-        self.state.manual_max = int(hi)
-        self._rerender()
-
-    def auto_stretch(self) -> tuple[int, int]:
-        """Stretch to 1–99.5% of the current frame, switch to manual at those
-        levels, and return (black, white) so the slider panel can sync. Returns
-        the existing manual range if no frame has been shown yet."""
+    def auto_baseline(self) -> None:
+        """Recompute the auto baseline (1–99.5%) from the current frame, keeping
+        the user's offsets. Called once on live-start and on each snap."""
         if self._last_raw is None:
-            return (self.state.manual_min, self.state.manual_max)
-        lo, hi = np.percentile(self._last_raw, (1.0, 99.5))
-        lo, hi = int(lo), int(hi)
+            return
+        self._set_baseline_from(self._last_raw)
+        self._rerender()
+
+    def reset_auto(self) -> None:
+        """Auto baseline AND re-center the offsets — the 'Auto' button: pristine
+        auto-stretch."""
+        self._black_off_pct = 0
+        self._white_off_pct = 0
+        self.auto_baseline()
+
+    def _set_baseline_from(self, frame: np.ndarray) -> None:
+        lo, hi = np.percentile(frame, (1.0, 99.5))
+        self._auto_lo, self._auto_hi = float(lo), float(hi)
+        if self._auto_hi <= self._auto_lo:
+            self._auto_hi = self._auto_lo + 1.0
+
+    def _effective_levels(self) -> tuple[float, float] | None:
+        if self._auto_lo is None or self._auto_hi is None:
+            return None
+        span = self._auto_hi - self._auto_lo
+        lo = self._auto_lo + (self._black_off_pct / 100.0) * span
+        hi = self._auto_hi + (self._white_off_pct / 100.0) * span
         if hi <= lo:
-            hi = lo + 1
-        self.set_manual_levels(lo, hi)
+            hi = lo + 1.0
         return (lo, hi)
 
+    # --- rendering --------------------------------------------------------
+
     def _rerender(self) -> None:
-        """Re-apply the current transform/contrast to the last frame. Lets
-        rotate/flip/contrast affect a static image (e.g. a SNAP), not just the
-        live stream where new frames pick up the change automatically."""
+        """Re-apply transform + contrast to the last frame so rotate/flip/contrast
+        affect a static image (e.g. a SNAP), not just the live stream."""
         if self._last_raw is not None:
             self.update_frame(self._last_raw)
 
@@ -91,12 +105,15 @@ class MaranaImageView(QtWidgets.QWidget):
         if frame is None or frame.size == 0:
             return
         self._last_raw = frame
+        # Establish a baseline lazily on the very first frame so there's always
+        # something sensible to display before an explicit trigger fires.
+        if self._auto_lo is None:
+            self._set_baseline_from(frame)
         view = self._apply_transform(frame)
-        levels = self._compute_levels(view)
+        levels = self._effective_levels()
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
         if levels is not None:
             self.image_item.setLevels(levels[0], levels[1])
-            self._last_levels = levels
 
     def _apply_transform(self, frame: np.ndarray) -> np.ndarray:
         view = frame
@@ -108,15 +125,3 @@ class MaranaImageView(QtWidgets.QWidget):
             k = self.state.rot // 90
             view = np.rot90(view, k=k)
         return np.ascontiguousarray(view)
-
-    def _compute_levels(self, view: np.ndarray) -> tuple[float, float] | None:
-        mode = self.state.contrast
-        if mode == ContrastMode.FREEZE:
-            return self._last_levels
-        if mode == ContrastMode.MANUAL:
-            return (self.state.manual_min, self.state.manual_max)
-        if mode == ContrastMode.PERCENTILE:
-            lo, hi = np.percentile(view, (self.state.percentile_lo, self.state.percentile_hi))
-            return (float(lo), float(hi))
-        # AUTO
-        return (float(view.min()), float(view.max()))
