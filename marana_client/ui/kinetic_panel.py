@@ -52,6 +52,9 @@ class KineticPanel(QtWidgets.QWidget):
         self.fps_spin.setRange(0.1, 200.0)
         self.fps_spin.setValue(100.0)
         grid.addWidget(self.fps_spin, 2, 1)
+        self.aoi_label = QtWidgets.QLabel("AOI: --")
+        self.aoi_label.setStyleSheet("color: #22d3ee;")
+        params.layout().addWidget(self.aoi_label)
         self.ram_label = QtWidgets.QLabel("Memory: --")
         self.ram_label.setStyleSheet("color: #facc15;")
         params.layout().addWidget(self.ram_label)
@@ -114,6 +117,7 @@ class KineticPanel(QtWidgets.QWidget):
 
     def set_aoi_for_estimate(self, x0: int, x1: int, y0: int, y1: int) -> None:
         self._aoi_for_estimate = (x0, x1, y0, y1)
+        self.aoi_label.setText(f"AOI: {x1 - x0 + 1}×{y1 - y0 + 1} @ ({x0},{y0})")
         self._refresh_estimate()
 
     def _refresh_estimate(self) -> None:

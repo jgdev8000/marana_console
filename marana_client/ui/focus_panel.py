@@ -69,6 +69,9 @@ class FocusPanel(QtWidgets.QWidget):
         self.derived_label = QtWidgets.QLabel("Stops: --    End Z: --")
         self.derived_label.setStyleSheet("color: #94a3b8;")
         rng.layout().addWidget(self.derived_label)
+        self.aoi_label = QtWidgets.QLabel("AOI: --")
+        self.aoi_label.setStyleSheet("color: #22d3ee;")
+        rng.layout().addWidget(self.aoi_label)
         outer.addWidget(rng)
 
         for w in (self.range_spin, self.step_spin):
@@ -165,6 +168,10 @@ class FocusPanel(QtWidgets.QWidget):
             self._dhlm_um = dhlm_um
         self.start_z_label.setText(f"{z_um:+.3f} µm")
         self._refresh_derived()
+
+    def set_aoi(self, x0: int, x1: int, y0: int, y1: int) -> None:
+        """Display the current camera AOI (each Z snapshot is taken at this AOI)."""
+        self.aoi_label.setText(f"AOI: {x1 - x0 + 1}×{y1 - y0 + 1} @ ({x0},{y0})")
 
     def apply_persisted_state(self, cfg: dict) -> None:
         if cfg.get("mover_source") == "real":

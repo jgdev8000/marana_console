@@ -115,6 +115,7 @@ def main(argv=None) -> int:
         cur_aoi["x0"], cur_aoi["y0"] = x0, y0
         live.set_aoi_values(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
         kinetic.set_aoi_for_estimate(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
+        focus.set_aoi(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
 
     try:
         _read_aoi()
