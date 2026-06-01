@@ -166,7 +166,7 @@ After installing on the actual hardware (real Marana plugged into USB3), run thr
 7. **Snapshot**: SNAP NOW → save dialog → save as `manual_snap.tif`. Open in ImageJ: should be uint16, correct dimensions.
 8. **Acquire & Save**: click ACQUIRE & SAVE… (stops live, takes fresh exposure, saves). Verify file.
 9. **Kinetic small**: Kinetic tab → 200 frames, 0.005s, 100 fps → START. Progress should advance; complete in ~2s. Scrub through frames. SAVE STACK… → server-side dialog → save. ssh to the Linux box and verify the file landed in `/var/lib/marana/captures/`.
-10. **Kinetic large** (optional): 1000 frames at 256×256. Should auto-batch (look for batching messages in the server log).
+10. **Kinetic large** (optional): 1000 frames at 256×256, one continuous run (no batching/pauses). Frames are buffered in RAM, so mind the memory estimate shown in the Kinetic panel for full-frame runs.
 11. **Reconnect**: stop the server (`sudo systemctl stop marana-server`); client should go amber within 5s. Start the server; SUB should reconnect and you can issue commands again (REQ may need a re-attempt after timeout).
 
 ## Project layout
