@@ -10,6 +10,7 @@ class LivePanel(QtWidgets.QWidget):
     requestSetFeature = QtCore.pyqtSignal(str, object)
     requestStartLive = QtCore.pyqtSignal()
     requestStop = QtCore.pyqtSignal()
+    requestSnapDisplay = QtCore.pyqtSignal()   # acquire one frame, display only (no save)
     requestSnapNow = QtCore.pyqtSignal()
     requestAcquireAndSave = QtCore.pyqtSignal()
     requestSetAoi = QtCore.pyqtSignal(int, int, int, int)
@@ -37,39 +38,24 @@ class LivePanel(QtWidgets.QWidget):
         exp_card.layout().addWidget(self.fps_label)
         outer.addWidget(exp_card)
 
-        # Modes card
+        # Modes card — Gain is the only user choice; Speed + Encoding follow it
+        # automatically (12-bit gain -> 200 MHz / Mono12, 16-bit gain -> 100 MHz /
+        # Mono16). Shutter is omitted (Rolling is the only option on the Marana).
         modes_card = self._make_card("MODES")
         modes_grid = QtWidgets.QGridLayout()
         modes_card.layout().addLayout(modes_grid)
 
-        modes_grid.addWidget(QtWidgets.QLabel("Speed:"), 0, 0)
-        self.speed_combo = QtWidgets.QComboBox()
-        self.speed_combo.currentTextChanged.connect(
-            lambda v: self.requestSetFeature.emit("PixelReadoutRate", v))
-        modes_grid.addWidget(self.speed_combo, 0, 1)
-
-        modes_grid.addWidget(QtWidgets.QLabel("Encoding:"), 1, 0)
-        self.encoding_combo = QtWidgets.QComboBox()
-        self.encoding_combo.currentTextChanged.connect(
-            lambda v: self.requestSetFeature.emit("PixelEncoding", v))
-        modes_grid.addWidget(self.encoding_combo, 1, 1)
-
-        modes_grid.addWidget(QtWidgets.QLabel("Shutter:"), 2, 0)
-        self.shutter_combo = QtWidgets.QComboBox()
-        self.shutter_combo.currentTextChanged.connect(
-            lambda v: self.requestSetFeature.emit("ElectronicShutteringMode", v))
-        modes_grid.addWidget(self.shutter_combo, 2, 1)
-
         # GainMode — the 12-bit-fast vs 16-bit-HDR control. Hidden on cameras
         # (e.g. SimCam) that don't expose it.
         self.gain_label = QtWidgets.QLabel("Gain:")
-        modes_grid.addWidget(self.gain_label, 3, 0)
+        modes_grid.addWidget(self.gain_label, 0, 0)
         self.gain_combo = QtWidgets.QComboBox()
         self.gain_combo.currentTextChanged.connect(
             lambda v: self.requestSetFeature.emit("GainMode", v))
-        modes_grid.addWidget(self.gain_combo, 3, 1)
+        modes_grid.addWidget(self.gain_combo, 0, 1)
 
-        # Read-only indicators (bit depth / readout time / max FPS)
+        # Read-only indicators (speed / encoding / bit depth / max FPS) — all
+        # derived from the current gain mode.
         self.indicators_label = QtWidgets.QLabel("")
         self.indicators_label.setStyleSheet("color: #94a3b8;")
         self.indicators_label.setWordWrap(True)
@@ -109,7 +95,11 @@ class LivePanel(QtWidgets.QWidget):
         self.stop_button.clicked.connect(self.requestStop.emit)
         cap_card.layout().addWidget(self.stop_button)
         cap_card.layout().addSpacing(8)
-        self.snap_button = QtWidgets.QPushButton("SNAP NOW")
+        self.snap_display_button = QtWidgets.QPushButton("SNAP")
+        self.snap_display_button.setToolTip("Acquire one frame and display it (no save)")
+        self.snap_display_button.clicked.connect(self.requestSnapDisplay.emit)
+        cap_card.layout().addWidget(self.snap_display_button)
+        self.snap_button = QtWidgets.QPushButton("SNAP && SAVE")
         self.snap_button.clicked.connect(self.requestSnapNow.emit)
         cap_card.layout().addWidget(self.snap_button)
         self.acq_save_button = QtWidgets.QPushButton("ACQUIRE && SAVE…")
@@ -130,62 +120,53 @@ class LivePanel(QtWidgets.QWidget):
         lay.addWidget(title_lab)
         return f
 
-    def populate_feature_options(self, options: dict[str, list[str]]) -> None:
-        for combo, key in ((self.speed_combo, "PixelReadoutRate"),
-                           (self.encoding_combo, "PixelEncoding"),
-                           (self.shutter_combo, "ElectronicShutteringMode")):
-            combo.blockSignals(True)
-            combo.clear()
-            for opt in options.get(key, []):
-                combo.addItem(opt)
-            combo.blockSignals(False)
-
-    def set_current_values(self, values: dict) -> None:
-        if "ExposureTime" in values:
-            self.exposure_spin.blockSignals(True)
-            self.exposure_spin.setValue(float(values["ExposureTime"]))
-            self.exposure_spin.blockSignals(False)
-        for key, combo in (("PixelReadoutRate", self.speed_combo),
-                           ("PixelEncoding", self.encoding_combo),
-                           ("ElectronicShutteringMode", self.shutter_combo)):
-            if key in values:
-                combo.blockSignals(True)
-                idx = combo.findText(str(values[key]))
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-                combo.blockSignals(False)
+    def set_exposure_value(self, exposure_s: float) -> None:
+        self.exposure_spin.blockSignals(True)
+        self.exposure_spin.setValue(float(exposure_s))
+        self.exposure_spin.blockSignals(False)
 
     def populate_acq_settings(self, snapshot: dict) -> None:
-        """Authoritative (re)fill of the speed/encoding/gain combos from a
-        get_acq_settings snapshot: only AVAILABLE options are listed, current
-        values restored, read-only indicators updated. Signals blocked so a
+        """Authoritative (re)fill of the Gain combo from a get_acq_settings
+        snapshot, plus the read-only indicators (Speed / Encoding / BitDepth /
+        max FPS) which all follow the current gain mode. Signals blocked so a
         repopulate never re-emits requestSetFeature."""
         options = snapshot.get("options", {})
         values = snapshot.get("values", {})
         readonly = snapshot.get("readonly", {})
-        for combo, key in ((self.speed_combo, "PixelReadoutRate"),
-                           (self.encoding_combo, "PixelEncoding"),
-                           (self.gain_combo, "GainMode")):
-            combo.blockSignals(True)
-            combo.clear()
-            for opt in options.get(key, []) or []:
-                combo.addItem(opt)
-            cur = values.get(key)
-            if cur is not None:
-                idx = combo.findText(str(cur))
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
+
+        self.gain_combo.blockSignals(True)
+        self.gain_combo.clear()
+        for opt in options.get("GainMode", []) or []:
+            self.gain_combo.addItem(opt)
+        cur = values.get("GainMode")
+        if cur is not None:
+            idx = self.gain_combo.findText(str(cur))
+            if idx >= 0:
+                self.gain_combo.setCurrentIndex(idx)
+        self.gain_combo.blockSignals(False)
+
         # GainMode hides itself when the camera doesn't expose it (e.g. SimCam)
         has_gain = bool(options.get("GainMode"))
         self.gain_label.setVisible(has_gain)
         self.gain_combo.setVisible(has_gain)
-        # Read-only indicators
+
+        # Read-only indicators — Speed + Encoding are derived from gain; show the
+        # currently-selected value of each.
+        def cur_or_first(key):
+            v = values.get(key)
+            if v is not None:
+                return v
+            opts = options.get(key) or []
+            return opts[0] if opts else None
         parts = []
+        speed = cur_or_first("PixelReadoutRate")
+        if speed is not None:
+            parts.append(f"Speed: {speed}")
+        enc = cur_or_first("PixelEncoding")
+        if enc is not None:
+            parts.append(f"Encoding: {enc}")
         if readonly.get("bit_depth") is not None:
             parts.append(f"BitDepth: {readonly['bit_depth']}")
-        if readonly.get("readout_time_s") is not None:
-            parts.append(f"Readout: {readonly['readout_time_s'] * 1e3:.1f} ms")
         if readonly.get("max_frame_rate_hz") is not None:
             parts.append(f"max FPS: {readonly['max_frame_rate_hz']:.1f}")
         self.indicators_label.setText("   ".join(parts))
