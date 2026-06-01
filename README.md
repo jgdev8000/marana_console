@@ -54,6 +54,44 @@ python -m marana_client --host 127.0.0.1
    python -c "import pyAndorSDK3; sdk = pyAndorSDK3.AndorSDK3(); print('devices:', sdk.DeviceCount)"
    ```
 
+## USB buffer memory (REQUIRED for the Marana over USB3)
+
+The kernel's `usbfs_memory_mb` defaults to **16 MB**, which is too small for the
+Marana-X's USB3 transfers. At 16 MB, live/kinetic acquisition can stall mid-run;
+when the SDK's transfer call hangs it freezes the whole server (symptom: every
+`stop` command times out and the server has to be killed). Set it to **1000**.
+
+Check it:
+```bash
+cat /sys/module/usbcore/parameters/usbfs_memory_mb     # want 1000, not 16
+```
+
+Runtime-only (reverts on reboot — fine for a quick test):
+```bash
+sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+```
+
+`usbcore` is built into the kernel on this host (not a module), so make it
+persistent one of two ways:
+
+**Option A — kernel command line (GRUB), recommended** (applied earliest at boot):
+```bash
+sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 usbcore.usbfs_memory_mb=1000"/' /etc/default/grub
+sudo update-grub
+sudo reboot
+# after reboot: cat /proc/cmdline   should show usbcore.usbfs_memory_mb=1000
+```
+
+**Option B — systemd tmpfiles drop-in** (no GRUB edit):
+```bash
+echo 'w /sys/module/usbcore/parameters/usbfs_memory_mb - - - - 1000' | sudo tee /etc/tmpfiles.d/marana-usbfs.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/marana-usbfs.conf
+```
+
+Don't bake this into `marana-server.service` — it runs as an unprivileged user and
+can't write sysfs, and a system-wide USB setting doesn't belong to the camera
+service. GRUB or tmpfiles is the right layer.
+
 ## Install Qt system dependencies (any client machine)
 
 The PyQt6 wheel needs a few system libraries on Linux:
