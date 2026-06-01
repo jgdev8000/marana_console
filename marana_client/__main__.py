@@ -159,8 +159,15 @@ def main(argv=None) -> int:
     live.requestStartLive.connect(_start_live)
     live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False), live.set_live_active(False)))
     def _apply_aoi(x0, x1, y0, y1):
-        """Set the camera AOI (0-based inclusive), then re-read the actual applied
-        AOI (the camera snaps to alignment) and refresh both panels + tracked origin."""
+        """Set the camera AOI (0-based inclusive). AOI is a cold setting and the
+        camera isn't thread-safe, so stop live first, apply, then resume — or, if
+        idle, snap one frame so the cropped region shows immediately. Re-reads the
+        actual applied AOI (the camera snaps to alignment) and refreshes panels."""
+        was_live = live.live_button.isChecked()
+        if was_live:
+            safe_req("stop", {})
+            live.set_live_active(False)
+            win.set_live_indicator(False)
         safe_req("set_feature", {"name": "AOIWidth", "value": x1 - x0 + 1})
         safe_req("set_feature", {"name": "AOIHeight", "value": y1 - y0 + 1})
         safe_req("set_feature", {"name": "AOILeft", "value": x0 + 1})
@@ -169,6 +176,10 @@ def main(argv=None) -> int:
             _read_aoi()
         except Exception as e:
             status_log.append(f"AOI re-read failed: {e}", "warn")
+        if was_live:
+            _start_live()        # frames resume at the new AOI and auto-display
+        else:
+            _snap_display()      # show the cropped region right away
 
     live.requestSetAoiFull.connect(
         lambda: _apply_aoi(0, server_info.get("sensor_w", 2048) - 1,
