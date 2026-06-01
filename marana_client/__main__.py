@@ -103,14 +103,21 @@ def main(argv=None) -> int:
             status_log.append(f"get_acq_settings failed: {e}", "warn")
     _refresh_acq_settings()
 
-    # AOI initial query
-    try:
+    # AOI tracking (origin needed to translate mouse selections to sensor coords)
+    cur_aoi = {"x0": 0, "y0": 0}
+
+    def _read_aoi():
+        """Read the camera's actual AOI, update tracked origin + both panels."""
         x0 = client.request("get_feature", {"name": "AOILeft"})["value"] - 1
         y0 = client.request("get_feature", {"name": "AOITop"})["value"] - 1
         w_ = client.request("get_feature", {"name": "AOIWidth"})["value"]
         h_ = client.request("get_feature", {"name": "AOIHeight"})["value"]
+        cur_aoi["x0"], cur_aoi["y0"] = x0, y0
         live.set_aoi_values(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
         kinetic.set_aoi_for_estimate(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
+
+    try:
+        _read_aoi()
     except Exception as e:
         status_log.append(f"AOI initial read failed: {e}", "warn")
 
@@ -150,19 +157,29 @@ def main(argv=None) -> int:
         win.set_live_indicator(True)
     live.requestStartLive.connect(_start_live)
     live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False)))
-    live.requestSetAoiFull.connect(lambda: (
-        safe_req("set_feature", {"name": "AOIWidth", "value": server_info.get("sensor_w", 2048)}),
-        safe_req("set_feature", {"name": "AOIHeight", "value": server_info.get("sensor_h", 2048)}),
-        safe_req("set_feature", {"name": "AOILeft", "value": 1}),
-        safe_req("set_feature", {"name": "AOITop", "value": 1}),
-    ))
-    live.requestSetAoi.connect(lambda x0, x1, y0, y1: (
-        safe_req("set_feature", {"name": "AOIWidth", "value": x1 - x0 + 1}),
-        safe_req("set_feature", {"name": "AOIHeight", "value": y1 - y0 + 1}),
-        safe_req("set_feature", {"name": "AOILeft", "value": x0 + 1}),
-        safe_req("set_feature", {"name": "AOITop", "value": y0 + 1}),
-        kinetic.set_aoi_for_estimate(x0, x1, y0, y1),
-    ))
+    def _apply_aoi(x0, x1, y0, y1):
+        """Set the camera AOI (0-based inclusive), then re-read the actual applied
+        AOI (the camera snaps to alignment) and refresh both panels + tracked origin."""
+        safe_req("set_feature", {"name": "AOIWidth", "value": x1 - x0 + 1})
+        safe_req("set_feature", {"name": "AOIHeight", "value": y1 - y0 + 1})
+        safe_req("set_feature", {"name": "AOILeft", "value": x0 + 1})
+        safe_req("set_feature", {"name": "AOITop", "value": y0 + 1})
+        try:
+            _read_aoi()
+        except Exception as e:
+            status_log.append(f"AOI re-read failed: {e}", "warn")
+
+    live.requestSetAoiFull.connect(
+        lambda: _apply_aoi(0, server_info.get("sensor_w", 2048) - 1,
+                           0, server_info.get("sensor_h", 2048) - 1))
+    live.requestSetAoi.connect(_apply_aoi)
+
+    def _on_aoi_drawn(r0, r1, c0, c1):
+        # raw rect is relative to the current AOI; offset by its origin to sensor coords
+        _apply_aoi(cur_aoi["x0"] + c0, cur_aoi["x0"] + c1,
+                   cur_aoi["y0"] + r0, cur_aoi["y0"] + r1)
+        status_log.append(f"AOI set from selection: {c1 - c0 + 1}x{r1 - r0 + 1}", "info")
+    image_view.aoiSelected.connect(_on_aoi_drawn)
 
     # Snapshot save (PC-side)
     def _snap_now():

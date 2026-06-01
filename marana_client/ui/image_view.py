@@ -26,6 +26,12 @@ class DisplayState:
 
 
 class MaranaImageView(QtWidgets.QWidget):
+    # Emitted on mouse-drag release: raw-frame rect (relative to the currently
+    # displayed AOI), inclusive: (row0, row1, col0, col1).
+    aoiSelected = QtCore.pyqtSignal(int, int, int, int)
+
+    _MIN_DRAG_PX = 4   # ignore tiny drags / clicks
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
@@ -35,6 +41,7 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.menuBtn.hide()
         layout.addWidget(self.image_item)
         self.state = DisplayState()
+        self._install_aoi_drag()
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
         self._auto_lo: float | None = None             # auto baseline black point
         self._auto_hi: float | None = None             # auto baseline white point
@@ -114,6 +121,90 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
         if levels is not None:
             self.image_item.setLevels(levels[0], levels[1])
+
+    def _install_aoi_drag(self) -> None:
+        """Disable view panning (no value here) and repurpose left-drag to draw
+        an AOI rubber-band that applies on release."""
+        vb = self.image_item.getView()
+        vb.setMouseEnabled(x=False, y=False)
+        vb.setMenuEnabled(False)
+        self._band = QtWidgets.QGraphicsRectItem()
+        self._band.setPen(pg.mkPen("#22d3ee", width=1))
+        self._band.setBrush(pg.mkBrush(34, 211, 238, 40))
+        self._band.hide()
+        vb.addItem(self._band)
+        self._vb = vb
+        vb.mouseDragEvent = self._on_vb_drag
+
+    def _on_vb_drag(self, ev, axis=None) -> None:
+        if ev.button() != QtCore.Qt.MouseButton.LeftButton:
+            ev.ignore()
+            return
+        ev.accept()
+        p1 = self._vb.mapSceneToView(ev.buttonDownScenePos())
+        p2 = self._vb.mapSceneToView(ev.scenePos())
+        x0, y0, x1, y1 = p1.x(), p1.y(), p2.x(), p2.y()
+        rect = QtCore.QRectF(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+        self._band.setRect(rect)
+        self._band.show()
+        if ev.isFinish():
+            self._band.hide()
+            self._finish_selection(x0, y0, x1, y1)
+
+    def _finish_selection(self, vx0, vy0, vx1, vy1) -> None:
+        """Map a finished drag to a raw rect and emit aoiSelected, ignoring drags
+        too small to be intentional."""
+        if abs(vx1 - vx0) < self._MIN_DRAG_PX or abs(vy1 - vy0) < self._MIN_DRAG_PX:
+            return
+        raw = self.display_rect_to_raw(vx0, vy0, vx1, vy1)
+        if raw is None:
+            return
+        r0, r1, c0, c1 = raw
+        if r1 > r0 and c1 > c0:
+            self.aoiSelected.emit(r0, r1, c0, c1)
+
+    def display_rect_to_raw(self, vx0, vy0, vx1, vy1):
+        """Map a rectangle in pyqtgraph view coords (where view-coord (vx,vy)
+        indexes the *displayed* image at row=vy, col=vx) back to raw-frame
+        row/col ranges, inverting the current flip+rotation. Returns
+        (row0, row1, col0, col1) inclusive in raw-frame space, or None if there's
+        no frame. Clamped to the raw frame bounds."""
+        if self._last_raw is None:
+            return None
+        H, W = self._last_raw.shape
+        r0, r1 = sorted((int(min(vy0, vy1)), int(max(vy0, vy1))))
+        c0, c1 = sorted((int(min(vx0, vx1)), int(max(vx0, vx1))))
+        # dims of the transformed (displayed) image
+        Ht, Wt = (W, H) if self.state.rot in (90, 270) else (H, W)
+        r0 = max(0, min(r0, Ht - 1)); r1 = max(0, min(r1, Ht - 1))
+        c0 = max(0, min(c0, Wt - 1)); c1 = max(0, min(c1, Wt - 1))
+        corners = [(r0, c0), (r0, c1), (r1, c0), (r1, c1)]
+        raw = [self._inv_point(r, c, H, W) for (r, c) in corners]
+        rows = [p[0] for p in raw]; cols = [p[1] for p in raw]
+        return (min(rows), max(rows), min(cols), max(cols))
+
+    def _inv_point(self, r, c, H, W):
+        """Invert flip_h, flip_v, rot90(k) for a single (row, col) in display
+        space → (row, col) in raw space. Forward order is flip_h, flip_v, rotk;
+        invert in reverse: un-rot, un-flip_v, un-flip_h."""
+        k = (self.state.rot // 90) % 4
+        # un-rotate: np.rot90(a, k) maps a[i,j] -> out[...]; invert by rot90(-k).
+        # Displayed (post-rot) point (r,c) in a Ht x Wt grid -> pre-rot (row,col)
+        # in the flipped raw H x W grid.
+        if k == 0:
+            rr, cc = r, c
+        elif k == 1:   # rot90 once (CCW): out[i,j] = flipped[j, W-1-i]
+            rr, cc = c, (W - 1 - r)
+        elif k == 2:   # 180
+            rr, cc = (H - 1 - r), (W - 1 - c)
+        else:          # k == 3 (270): out[i,j] = flipped[H-1-j, i]
+            rr, cc = (H - 1 - c), r
+        # un-flip
+        if self.state.flip_v:
+            rr = H - 1 - rr
+        if self.state.flip_h:
+            cc = W - 1 - cc
+        return (rr, cc)
 
     def _apply_transform(self, frame: np.ndarray) -> np.ndarray:
         view = frame
