@@ -87,22 +87,13 @@ def main(argv=None) -> int:
     except Exception as e:
         status_log.append(f"connect failed: {e}", "error")
 
-    # Populate combos (each get_feature returns options for enum features)
-    opts: dict[str, list[str]] = {}
-    values: dict = {}
-    for name in ("ExposureTime", "PixelEncoding", "PixelReadoutRate", "ElectronicShutteringMode"):
-        try:
-            r = client.request("get_feature", {"name": name})
-            if "value" in r:
-                values[name] = r["value"]
-            if r.get("options"):
-                opts[name] = list(r["options"])
-        except Exception as e:
-            status_log.append(f"get_feature {name} failed: {e}", "warn")
-    live.populate_feature_options(opts)
-    live.set_current_values(values)
+    # Current exposure
+    try:
+        live.set_exposure_value(client.request("get_feature", {"name": "ExposureTime"})["value"])
+    except Exception as e:
+        status_log.append(f"ExposureTime read failed: {e}", "warn")
 
-    # Authoritative speed/encoding/gain population (availability-filtered) + indicators.
+    # Gain combo + derived Speed/Encoding/BitDepth indicators (availability-filtered).
     def _refresh_acq_settings():
         try:
             snap = client.request("get_acq_settings", {})
@@ -143,13 +134,13 @@ def main(argv=None) -> int:
             status_log.append(f"{cmd}: {e}", "error")
         return None
 
-    # Coupled features whose change alters which options are available — repopulate after.
-    _COUPLED = {"PixelReadoutRate", "PixelEncoding", "GainMode"}
-
     def _on_set_feature(name, value):
         safe_req("set_feature", {"name": name, "value": value})
-        if name in _COUPLED:
-            _refresh_acq_settings()
+        if name == "GainMode":
+            # Encoding follows gain: 16-bit gain -> Mono16, otherwise Mono12.
+            encoding = "Mono16" if "16-bit" in str(value) else "Mono12"
+            safe_req("set_feature", {"name": "PixelEncoding", "value": encoding})
+            _refresh_acq_settings()   # Speed/Encoding/BitDepth indicators update
 
     live.requestSetFeature.connect(_on_set_feature)
     live.requestStartLive.connect(lambda: (safe_req("start_live", {}), win.set_live_indicator(True)))
@@ -208,6 +199,16 @@ def main(argv=None) -> int:
         except Exception as e:
             status_log.append(f"save failed: {e}", "error")
 
+    def _snap_display():
+        # Acquire one fresh frame and show it — no save dialog, nothing written.
+        r = safe_req("snap_single", {"exposure_s": live.exposure_spin.value()}, timeout_ms=60000)
+        if r is None:
+            return
+        arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
+        image_view.update_frame(arr)
+        status_log.append("snapped frame (display only)", "info")
+
+    live.requestSnapDisplay.connect(_snap_display)
     live.requestSnapNow.connect(_snap_now)
     live.requestAcquireAndSave.connect(_acquire_and_save)
 
