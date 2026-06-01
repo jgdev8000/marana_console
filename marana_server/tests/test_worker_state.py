@@ -301,3 +301,12 @@ def test_get_acq_settings_passthrough(worker):
     result = w.submit_sync("get_acq_settings", {})
     assert result == snap
     cam.get_acq_settings.assert_called_once()
+
+
+def test_last_heartbeat_advances(worker):
+    w, _, _ = worker
+    import time as _t
+    h1 = w.last_heartbeat()
+    _t.sleep(0.6)   # > the 0.5s run-loop tick
+    h2 = w.last_heartbeat()
+    assert h2 > h1

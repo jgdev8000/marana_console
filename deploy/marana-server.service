@@ -5,7 +5,11 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+# Type=notify: the server sends READY=1 once up and pings WATCHDOG=1 while the
+# camera worker is healthy. If the worker wedges (e.g. an SDK/USB acquisition
+# hang), pings stop and systemd restarts the service after WatchdogSec.
+Type=notify
+WatchdogSec=90
 User=andor
 Group=andor
 WorkingDirectory=/opt/marana/marana_console
@@ -21,7 +25,7 @@ ExecStart=/opt/marana/venv/bin/python -m marana_server \
   --captures-dir /var/lib/marana/captures \
   --log-level INFO
 Restart=on-failure
-RestartSec=5
+RestartSec=3
 StandardOutput=append:/var/log/marana/server.log
 StandardError=append:/var/log/marana/server.log
 

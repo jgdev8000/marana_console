@@ -47,6 +47,7 @@ class CameraWorker(threading.Thread):
         self._stop_evt = threading.Event()
         self._state = WorkerState.IDLE
         self._cancel_evt = threading.Event()
+        self._heartbeat = time.monotonic()   # updated each run-loop iteration
         self._live_thread: threading.Thread | None = None
         self._kinetic_thread: threading.Thread | None = None
         self._kinetic_frames = None  # np.ndarray (N, H, W) or None
@@ -92,6 +93,7 @@ class CameraWorker(threading.Thread):
     def run(self) -> None:
         self._publish_state()
         while not self._stop_evt.is_set():
+            self._heartbeat = time.monotonic()   # liveness for the watchdog
             try:
                 cmd, args, reply = self._inq.get(timeout=0.5)
             except queue.Empty:
@@ -101,6 +103,11 @@ class CameraWorker(threading.Thread):
                 break
             self._dispatch(cmd, args, reply)
         log.info("CameraWorker exiting")
+
+    def last_heartbeat(self) -> float:
+        """monotonic() timestamp of the last run-loop iteration. Goes stale if a
+        handler wedges the worker — the watchdog uses this to trigger a restart."""
+        return self._heartbeat
 
     def _idle_tick(self) -> None:
         try:

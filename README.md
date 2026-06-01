@@ -257,3 +257,23 @@ works on Encoding — Mono16 is unavailable on the sim).
 2. Gain combo lists the two gain modes; selecting **High dynamic range (16-bit)**
    makes **Mono16** appear in Encoding and BitDepth read **16 Bit**.
 3. Selecting **Fastest frame rate (12-bit)** removes Mono16 from Encoding.
+
+## Auto-restart watchdog
+
+The `marana-server.service` unit uses systemd's watchdog (`Type=notify` +
+`WatchdogSec=90`). The server pings systemd while the camera worker is healthy;
+if the worker wedges — e.g. an SDK/USB acquisition call hangs and stops
+responding (symptom: `stop` commands time out) — the pings stop and systemd
+**kills and restarts the server within ~90 s**. The client then reconnects to a
+fresh server.
+
+This is recovery by restart, not an in-place rescue: an in-flight live stream or
+an unsaved kinetic/focus buffer is lost on restart, so save before long runs.
+
+The watchdog is only active under systemd. A manual `python -m marana_server`
+launch has no `NOTIFY_SOCKET`, so the notify calls are harmless no-ops and the
+server behaves exactly as before.
+
+`WatchdogSec=90` tolerates a legitimate long exposure (up to the 60 s max ⇒ a
+single snap can block the worker ~62 s). Lower it in the unit if your exposures
+are always short and you want faster recovery.
