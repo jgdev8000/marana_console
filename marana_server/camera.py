@@ -178,6 +178,22 @@ class MaranaCamera:
         view16 = view16.reshape(height, cols_in_stride)
         return view16[:, :width].copy()  # copy: caller can re-queue the buffer
 
+    def _decode_into(self, raw_buf, image_bytes: int, dest) -> None:
+        """Decode a raw uint8 buffer straight into `dest` (an (H, W) uint16 array
+        row of a preallocated stack) — one memcpy instead of the two that
+        `_decode_buffer` + assignment would do. `dest` must already be H x W."""
+        import numpy as np
+        cam = self._require()
+        height = int(cam.AOIHeight)
+        width = int(cam.AOIWidth)
+        stride = int(cam.AOIStride)
+        if not isinstance(raw_buf, np.ndarray):
+            arr = np.frombuffer(raw_buf, dtype=np.uint8, count=image_bytes)
+        else:
+            arr = raw_buf[:image_bytes].view(np.uint8)
+        view16 = arr[: height * stride].view(np.uint16).reshape(height, stride // 2)
+        np.copyto(dest, view16[:, :width])
+
     def single_shot(self, timeout_ms: int = 3000, exposure_s: float | None = None):
         import numpy as np
         from marana_proto.errors import AcquisitionTimeout
@@ -305,7 +321,7 @@ class MaranaCamera:
                             raise AcquisitionTimeout(str(e)) from e
                         raise
                     buf = ring[i % ring_size]
-                    frames[done] = self._decode_buffer(buf, image_bytes)
+                    self._decode_into(buf, image_bytes, frames[done])
                     done += 1
                     next_q = i + ring_size
                     if next_q < frame_count:

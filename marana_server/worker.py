@@ -377,13 +377,20 @@ class CameraWorker(threading.Thread):
         return {"frame_bytes": bytes(f.tobytes()), "header": header}
 
     def _kinetic_loop(self, k: dict) -> None:
+        total_frames = k["frame_count"]
+        last_pub = [0.0]   # mutable cell for the closure
+
         def on_progress(done, total, fps):
-            elapsed = self._kinetic_status.get("elapsed_s", 0.0)
             self._kinetic_status = {
                 "frames_done": done, "frames_total": total,
-                "achieved_fps": fps, "elapsed_s": elapsed,
+                "achieved_fps": fps, "elapsed_s": self._kinetic_status.get("elapsed_s", 0.0),
             }
-            self._outq.put(m.make_status(m.TOPIC_KINETIC_PROGRESS, self._kinetic_status))
+            # Publish at most ~10 Hz (and always the final frame) so high-rate
+            # bursts aren't throttled by per-frame msgpack/ZMQ churn.
+            now = time.monotonic()
+            if done == total_frames or now - last_pub[0] >= 0.1:
+                last_pub[0] = now
+                self._outq.put(m.make_status(m.TOPIC_KINETIC_PROGRESS, self._kinetic_status))
         try:
             frames, done, elapsed = self._camera.kinetic_burst(
                 frame_count=k["frame_count"], exposure_s=k["exposure_s"],
