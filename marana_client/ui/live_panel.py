@@ -181,6 +181,13 @@ class LivePanel(QtWidgets.QWidget):
     def set_fps(self, fps: float) -> None:
         self.fps_label.setText(f"FPS: {fps:.1f}")
 
+    def set_live_active(self, on: bool) -> None:
+        """Reflect the actual live state on the LIVE button (lit when running).
+        Signals blocked so syncing state doesn't re-trigger start/stop."""
+        self.live_button.blockSignals(True)
+        self.live_button.setChecked(on)
+        self.live_button.blockSignals(False)
+
     def _emit_aoi(self) -> None:
         x0 = self.aoi_spins["L"].value()
         y0 = self.aoi_spins["T"].value()

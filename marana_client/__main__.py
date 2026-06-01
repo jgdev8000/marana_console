@@ -157,7 +157,7 @@ def main(argv=None) -> int:
         safe_req("start_live", {})
         win.set_live_indicator(True)
     live.requestStartLive.connect(_start_live)
-    live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False)))
+    live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False), live.set_live_active(False)))
     def _apply_aoi(x0, x1, y0, y1):
         """Set the camera AOI (0-based inclusive), then re-read the actual applied
         AOI (the camera snaps to alignment) and refresh both panels + tracked origin."""
@@ -373,11 +373,12 @@ def main(argv=None) -> int:
             focus.on_focus_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
             win.set_live_indicator(False)
         elif topic == m.TOPIC_STATE:
-            status_log.append(f"state: {header.get('state')}", "info")
-            if header.get("state") == "LIVE":
-                win.set_live_indicator(True)
-            elif header.get("state") == "IDLE":
-                win.set_live_indicator(False)
+            state = header.get("state")
+            status_log.append(f"state: {state}", "info")
+            is_live = state == "LIVE"
+            if state in ("LIVE", "IDLE", "ERROR"):
+                win.set_live_indicator(is_live)
+                live.set_live_active(is_live)   # keep the LIVE button lit only while actually live
 
     worker.frameReady.connect(_on_frame)
     worker.statusEvent.connect(_on_status)
