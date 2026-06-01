@@ -10,6 +10,8 @@ import time
 
 from marana_server.camera import MaranaCamera
 from marana_server.service import MaranaService
+from marana_server import sdnotify
+from marana_server.watchdog import WatchdogNotifier, warn_if_low_usbfs
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,6 +46,9 @@ def main(argv: list[str] | None = None) -> int:
              "simulator" if args.sim else "real camera", args.sim,
              cam.model, cam.serial, cam.sensor_width, cam.sensor_height)
 
+    if not args.sim:
+        warn_if_low_usbfs()   # nudge if usbfs_memory_mb is too low for USB3
+
     service = MaranaService(
         camera=cam,
         ctrl_endpoint=f"tcp://{args.bind}:{args.ctrl_port}",
@@ -53,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         allow_shutdown=args.allow_shutdown,
     )
     service.start()
+
+    # systemd readiness + watchdog (no-ops when not run under systemd).
+    sdnotify.ready()
+    notifier = WatchdogNotifier(heartbeat_fn=service._worker.last_heartbeat)
+    notifier.start()
 
     stop = False
     def _sig(signo, frame):
@@ -67,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         while not stop and service.is_alive():
             time.sleep(0.5)
     finally:
+        notifier.stop()
         service.join(timeout=5.0)
         cam.close()
     return 0
