@@ -39,14 +39,17 @@ class MaranaImageView(QtWidgets.QWidget):
         layout.addWidget(self.image_item)
         self.state = DisplayState()
         self._last_levels: tuple[float, float] | None = None
+        self._last_raw: np.ndarray | None = None  # last frame, untransformed
 
     def set_rotation(self, deg: int) -> None:
         assert deg in (0, 90, 180, 270)
         self.state.rot = deg
+        self._rerender()
 
     def set_flip(self, h: bool, v: bool) -> None:
         self.state.flip_h = h
         self.state.flip_v = v
+        self._rerender()
 
     def set_contrast(self, mode: ContrastMode, manual_min: int = 0, manual_max: int = 65535,
                      pct_lo: float = 1.0, pct_hi: float = 99.5) -> None:
@@ -55,10 +58,19 @@ class MaranaImageView(QtWidgets.QWidget):
         self.state.manual_max = manual_max
         self.state.percentile_lo = pct_lo
         self.state.percentile_hi = pct_hi
+        self._rerender()
+
+    def _rerender(self) -> None:
+        """Re-apply the current transform/contrast to the last frame. Lets
+        rotate/flip/contrast affect a static image (e.g. a SNAP), not just the
+        live stream where new frames pick up the change automatically."""
+        if self._last_raw is not None:
+            self.update_frame(self._last_raw)
 
     def update_frame(self, frame: np.ndarray) -> None:
         if frame is None or frame.size == 0:
             return
+        self._last_raw = frame
         view = self._apply_transform(frame)
         levels = self._compute_levels(view)
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
