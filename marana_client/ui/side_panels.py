@@ -38,12 +38,14 @@ class CoolingPanel(QtWidgets.QFrame):
         self._controls_synced = False
 
     def update_cooling(self, enabled: bool, target_c: float, sensor_temp_c: float, status: str) -> None:
-        """Update the live readouts (sensor temp + status) on every event. The
-        Enable checkbox and Target are USER INPUTS applied via APPLY, so they are
-        only synced to the camera ONCE (at first update) — otherwise periodic
-        temperature events would clear the user's selection before they can APPLY."""
+        """Update the live readouts (sensor temp + status) on every event.
+
+        The Enable checkbox always starts OFF and is a pure user-intent input
+        (applied via APPLY) — it is never auto-checked from the camera, so the
+        operator must consciously turn cooling on. The actual cooling state is
+        shown by the Status readout. The Target is synced to the camera's setpoint
+        once at first update, then left to the user."""
         if not self._controls_synced:
-            self.enable_cb.blockSignals(True); self.enable_cb.setChecked(enabled); self.enable_cb.blockSignals(False)
             self.target_spin.blockSignals(True); self.target_spin.setValue(target_c); self.target_spin.blockSignals(False)
             self._controls_synced = True
         self.temp_label.setText(f"Sensor: {sensor_temp_c:+.2f} °C")
