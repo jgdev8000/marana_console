@@ -66,6 +66,12 @@ QPushButton#stopButton:enabled {
     border-color: #f59e0b;
     color: #f59e0b;
 }
+QPushButton#toggleButton:checked {
+    background-color: #0f5132;
+    border-color: #10b981;
+    color: #10b981;
+    font-weight: bold;
+}
 QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
     background-color: #0e1c33;
     border: 1px solid #1e3a5f;

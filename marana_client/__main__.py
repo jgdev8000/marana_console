@@ -15,7 +15,7 @@ from marana_client.io_tiff import write_snapshot
 from marana_client.meta import build_snapshot_metadata
 from marana_client.worker import ClientWorker
 from marana_client.ui.connection_card import ConnectionCard
-from marana_client.ui.image_view import MaranaImageView, ContrastMode
+from marana_client.ui.image_view import MaranaImageView
 from marana_client.ui.kinetic_panel import KineticPanel
 from marana_client.ui.kinetic_save_dialog import KineticSaveDialog
 from marana_client.ui.live_panel import LivePanel
@@ -313,8 +313,8 @@ def main(argv=None) -> int:
     cooling.requestSetCooling.connect(lambda enable, t: safe_req("cooling_set", {"enable": enable, "target_c": t}))
     disp.requestRotation.connect(image_view.set_rotation)
     disp.requestFlip.connect(image_view.set_flip)
-    contrast.requestContrast.connect(
-        lambda mode, mn, mx: image_view.set_contrast(ContrastMode(mode), manual_min=mn, manual_max=mx))
+    contrast.requestLevels.connect(image_view.set_manual_levels)
+    contrast.requestAuto.connect(lambda: contrast.set_levels(*image_view.auto_stretch()))
 
     # Worker -> GUI updates
     def _on_frame(topic: bytes, header: dict, arr: np.ndarray) -> None:

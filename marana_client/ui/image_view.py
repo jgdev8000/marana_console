@@ -60,6 +60,26 @@ class MaranaImageView(QtWidgets.QWidget):
         self.state.percentile_hi = pct_hi
         self._rerender()
 
+    def set_manual_levels(self, lo: int, hi: int) -> None:
+        """Switch to manual contrast with explicit black/white points (live slider)."""
+        self.state.contrast = ContrastMode.MANUAL
+        self.state.manual_min = int(lo)
+        self.state.manual_max = int(hi)
+        self._rerender()
+
+    def auto_stretch(self) -> tuple[int, int]:
+        """Stretch to 1–99.5% of the current frame, switch to manual at those
+        levels, and return (black, white) so the slider panel can sync. Returns
+        the existing manual range if no frame has been shown yet."""
+        if self._last_raw is None:
+            return (self.state.manual_min, self.state.manual_max)
+        lo, hi = np.percentile(self._last_raw, (1.0, 99.5))
+        lo, hi = int(lo), int(hi)
+        if hi <= lo:
+            hi = lo + 1
+        self.set_manual_levels(lo, hi)
+        return (lo, hi)
+
     def _rerender(self) -> None:
         """Re-apply the current transform/contrast to the last frame. Lets
         rotate/flip/contrast affect a static image (e.g. a SNAP), not just the
