@@ -264,10 +264,21 @@ class MaranaCamera:
         cam.CycleMode = "Continuous"
         cam.TriggerMode = "Internal"
         cam.ExposureTime = exposure_s
+        # Clamp the requested rate into the camera's currently-allowed range
+        # (which depends on exposure + AOI). Setting a value above the max is
+        # rejected (AT_ERR_OUTOFRANGE) and would silently leave FrameRate at a
+        # stale low value, throttling the whole burst.
         try:
-            cam.FrameRate = frame_rate_hz
+            lib, h = cam._lib, cam._handle
+            try:
+                fr_min = float(lib.get_float_min(h, "FrameRate"))
+                fr_max = float(lib.get_float_max(h, "FrameRate"))
+                target = max(fr_min, min(frame_rate_hz, fr_max))
+            except Exception:
+                target = frame_rate_hz
+            cam.FrameRate = target
         except Exception:
-            pass  # sim or small-AOI may reject FrameRate; carry on
+            pass  # sim or small-AOI may reject FrameRate entirely; carry on
 
         image_bytes = int(cam.ImageSizeBytes)
         height = int(cam.AOIHeight)
