@@ -318,7 +318,12 @@ class MaranaCamera:
                         cam.wait_buffer(timeout=int(2000 + 1000 * exposure_s))
                     except Exception as e:
                         if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
-                            raise AcquisitionTimeout(str(e)) from e
+                            # A stall (camera stopped delivering) — finish with the
+                            # frames acquired so far as a PARTIAL result instead of
+                            # aborting the whole burst to an ERROR state.
+                            log.warning("kinetic wait_buffer timed out after %d/%d frames; "
+                                        "returning partial", done, frame_count)
+                            break
                         raise
                     buf = ring[i % ring_size]
                     self._decode_into(buf, image_bytes, frames[done])

@@ -410,7 +410,17 @@ class CameraWorker(threading.Thread):
         except Exception as e:
             log.exception("kinetic loop error")
             self._publish_error(e)
-            self._set_state(WorkerState.ERROR)
+            # Recover the client UI: emit a (partial) completion so START re-enables
+            # instead of the panel looking hung in an unrecoverable state.
+            st = self._kinetic_status
+            self._outq.put(m.make_status(m.TOPIC_KINETIC_COMPLETE, {
+                "frames_done": st.get("frames_done", 0),
+                "frames_total": k["frame_count"],
+                "partial": True,
+                "achieved_fps": st.get("achieved_fps", 0.0),
+                "elapsed_s": st.get("elapsed_s", 0.0),
+            }))
+            self._set_state(WorkerState.IDLE)
             return
         self._set_state(WorkerState.IDLE)
 
