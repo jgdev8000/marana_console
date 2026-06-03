@@ -2,8 +2,19 @@ import json
 import tifffile
 import numpy as np
 
-from marana_client.io_tiff import write_snapshot
+from marana_client.io_tiff import write_snapshot, write_stack
 from marana_client.meta import build_snapshot_metadata
+
+
+def test_write_stack_round_trip(tmp_path):
+    frames = (np.arange(3 * 6 * 5, dtype=np.uint16) % 100).reshape(3, 6, 5)
+    md = {"acquisition": {"frame_count": 3}}
+    path = tmp_path / "stack.tif"
+    write_stack(str(path), frames, md)
+    with tifffile.TiffFile(str(path)) as tf:
+        reread = tf.asarray()
+        assert len(tf.pages) == 3
+    np.testing.assert_array_equal(reread, frames)
 
 
 def test_write_snapshot_round_trip(tmp_path):

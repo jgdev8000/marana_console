@@ -27,6 +27,17 @@ class ConnectionCard(QtWidgets.QFrame):
         self._host = host
         self._refresh_label()
 
+    @property
+    def current_state(self) -> int:
+        return self._state
+
+    def mark_healthy(self) -> None:
+        """Promote to HEALTHY on any sign of life (a successful round-trip or an
+        inbound frame/status event). No-op if already healthy so the hot path
+        (every live frame) doesn't churn the stylesheet."""
+        if self._state != self.STATE_HEALTHY:
+            self.set_state(self.STATE_HEALTHY)
+
     def set_state(self, state: int) -> None:
         self._state = state
         if state == self.STATE_HEALTHY:

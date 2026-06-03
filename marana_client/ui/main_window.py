@@ -42,6 +42,12 @@ class MainWindow(QtWidgets.QMainWindow):
         center_layout.addWidget(self.scrubber_strip)
         root.addWidget(center, stretch=1)
 
+        # The scrubber belongs to the kinetic results: show it only when the
+        # kinetic tab is active AND a burst has buffered frames. Re-evaluate on
+        # every tab switch so it never bleeds into the LIVE/FOCUS views.
+        self._scrubber_available = False
+        self.left_tabs.currentChanged.connect(lambda _i: self._sync_scrubber())
+
         # Right column: side panels stacked vertically
         self.right_column = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(self.right_column)
@@ -111,5 +117,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._contrast = contrast
         self._log = status_log
 
+    def set_scrubber_available(self, available: bool) -> None:
+        """Record whether buffered kinetic frames exist, then reconcile the
+        scrubber's visibility against the active tab."""
+        self._scrubber_available = available
+        self._sync_scrubber()
+
+    def _sync_scrubber(self) -> None:
+        on_kinetic = self.left_tabs.currentWidget() is self.kinetic_tab
+        self.scrubber_strip.setVisible(self._scrubber_available and on_kinetic)
+
     def show_scrubber(self, show: bool) -> None:
-        self.scrubber_strip.setVisible(show)
+        """Back-compat shim: treat as 'frames available?' and let _sync_scrubber
+        apply the active-tab gate."""
+        self.set_scrubber_available(show)
