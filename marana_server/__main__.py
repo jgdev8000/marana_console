@@ -66,9 +66,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # systemd readiness + watchdog (no-ops when not run under systemd).
     sdnotify.ready()
+    # Tight recovery: with WatchdogSec=20 in the unit, freeze -> systemd kill is
+    # ~stale_after + WatchdogSec ≈ 30s (was ~165s). Margin is generous vs. the
+    # worst healthy stall: one blocking cffi call holds the GIL for the
+    # wait_buffer timeout (~2s) or a SNAP's exposure on the run thread. Any
+    # single op up to ~30s still survives; only a real wedge trips it. The stack
+    # dump fires at dump_after (8s), well before the kill.
     notifier = WatchdogNotifier(
         heartbeat_fn=service._worker.last_heartbeat,
         describe_fn=service._worker.describe_activity,
+        interval=5.0,
+        stale_after=10.0,
+        dump_after=8.0,
     )
     notifier.start()
 
