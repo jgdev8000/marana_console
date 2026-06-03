@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import os
 import signal
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("marana_server")
 
+    # Dump native + Python stacks on a fatal signal (e.g. systemd's watchdog
+    # SIGABRT), so even a hard kill leaves a post-mortem in the journal.
+    faulthandler.enable()
+
     cam = MaranaCamera()
     cam.open(sim=args.sim)
     log.info("Opened %s (sim=%s) model=%r serial=%r sensor=%dx%d",
@@ -61,7 +66,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # systemd readiness + watchdog (no-ops when not run under systemd).
     sdnotify.ready()
-    notifier = WatchdogNotifier(heartbeat_fn=service._worker.last_heartbeat)
+    notifier = WatchdogNotifier(
+        heartbeat_fn=service._worker.last_heartbeat,
+        describe_fn=service._worker.describe_activity,
+    )
     notifier.start()
 
     stop = False

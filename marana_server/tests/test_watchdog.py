@@ -49,3 +49,60 @@ def test_notifier_withholds_when_stale():
         time.sleep(0.2)
         wn.stop(); wn.join(timeout=1.0)
     assert sends == []       # never pinged because heartbeat is stale
+
+
+# --- wedge stack dump -------------------------------------------------------
+
+def _run_notifier(heartbeat_fn, **kw):
+    dumps = []
+    descs = []
+    wn = watchdog.WatchdogNotifier(
+        heartbeat_fn=heartbeat_fn,
+        interval=0.02,
+        stale_after=1000.0,                       # don't withhold; isolate dump logic
+        dump_fn=lambda: dumps.append(1),
+        describe_fn=lambda: (descs.append(1) or "state=KINETIC sdk=acq_stop"),
+        **kw,
+    )
+    with patch("marana_server.watchdog.sdnotify.watchdog", lambda: None):
+        wn.start()
+        time.sleep(0.25)
+        wn.stop(); wn.join(timeout=1.0)
+    return dumps, descs
+
+
+def test_notifier_dumps_stacks_on_wedge(caplog):
+    stale_ts = time.monotonic() - 1000.0
+    with caplog.at_level("ERROR"):
+        dumps, descs = _run_notifier(lambda: stale_ts, dump_after=0.01)
+    assert len(dumps) == 1            # dumped exactly once for the episode
+    assert len(descs) >= 1            # included the activity description
+    assert any("WEDGED" in r.message for r in caplog.records)
+
+
+def test_notifier_no_dump_while_fresh():
+    dumps, _ = _run_notifier(lambda: time.monotonic(), dump_after=0.01)
+    assert dumps == []               # healthy heartbeat never dumps
+
+
+def test_notifier_redumps_after_recovery():
+    # Heartbeat is stale, then recovers (fresh), then wedges again -> 2 dumps.
+    state = {"phase": "wedged1"}
+
+    def hb():
+        return time.monotonic() - (1000.0 if state["phase"].startswith("wedged") else 0.0)
+
+    dumps = []
+    wn = watchdog.WatchdogNotifier(
+        heartbeat_fn=hb, interval=0.02, stale_after=1000.0,
+        dump_after=0.01, dump_fn=lambda: dumps.append(1),
+    )
+    with patch("marana_server.watchdog.sdnotify.watchdog", lambda: None):
+        wn.start()
+        time.sleep(0.1)              # wedged1 -> 1 dump
+        state["phase"] = "fresh"
+        time.sleep(0.1)              # recovered -> re-arm
+        state["phase"] = "wedged2"
+        time.sleep(0.1)              # wedged2 -> 2nd dump
+        wn.stop(); wn.join(timeout=1.0)
+    assert len(dumps) == 2

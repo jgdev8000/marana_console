@@ -4,12 +4,20 @@ Not thread-safe. Only the camera worker thread on the server should call into th
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+import time
 from typing import Optional
 
 from marana_proto.errors import CameraDisconnected
 
 log = logging.getLogger(__name__)
+
+# A blocking SDK (cffi) call that returns but takes longer than this is logged at
+# WARNING as a hang precursor. A TRUE hang never returns, so it won't trip this —
+# the watchdog's all-thread stack dump is what catches that. Kept generous so the
+# normal per-frame path stays silent.
+SDK_SLOW_WARN_S = 1.0
 
 # Note: pyAndorSDK3 < 1.23 crashed in Camera.__init__ (__populate_config) on the
 # SimCam because is_readable("MetadataEnable") returned AT_ERR_NOTIMPLEMENTED, and
@@ -22,6 +30,34 @@ class MaranaCamera:
     def __init__(self) -> None:
         self._sdk = None
         self._cam = None  # pyAndorSDK3.andor_camera.Camera
+        self._activity = "idle"  # last/current blocking SDK call, for the watchdog
+
+    def current_activity(self) -> str:
+        """Human-readable label of the SDK call in flight (or 'idle'). The
+        watchdog surfaces this when the worker wedges, so the journal says e.g.
+        'sdk=safe_continuous_iter.AcquisitionStop' instead of just a stack."""
+        return self._activity
+
+    @contextlib.contextmanager
+    def _sdk_call(self, name: str):
+        """Breadcrumb + timing around a blocking SDK call.
+
+        Records `current_activity` so a wedge report can name the call, and warns
+        if a call is slow-but-returning. Cheap enough for the per-frame path
+        (DEBUG logs short-circuit when disabled). A real hang never reaches the
+        exit branch — the watchdog stack dump covers that case."""
+        self._activity = name
+        t0 = time.monotonic()
+        log.debug("→ sdk %s", name)
+        try:
+            yield
+        finally:
+            dt = time.monotonic() - t0
+            self._activity = "idle"
+            if dt >= SDK_SLOW_WARN_S:
+                log.warning("slow SDK call %s took %.2fs", name, dt)
+            else:
+                log.debug("← sdk %s %.3fs", name, dt)
 
     def open(self, sim: bool = False) -> None:
         if self._cam is not None:
@@ -202,13 +238,18 @@ class MaranaCamera:
             self._configure_single_frame_mode(exposure_s=exposure_s)
             image_bytes = int(cam.ImageSizeBytes)
             buf = np.empty(image_bytes, dtype=np.uint8)
-            cam.queue(buf, image_bytes)
-            cam.AcquisitionStart()
+            with self._sdk_call("single_shot.queue"):
+                cam.queue(buf, image_bytes)
+            with self._sdk_call("single_shot.AcquisitionStart"):
+                cam.AcquisitionStart()
             try:
-                cam.wait_buffer(timeout=timeout_ms)
+                with self._sdk_call("single_shot.wait_buffer"):
+                    cam.wait_buffer(timeout=timeout_ms)
             finally:
-                cam.AcquisitionStop()
-                cam.flush()
+                with self._sdk_call("single_shot.AcquisitionStop"):
+                    cam.AcquisitionStop()
+                with self._sdk_call("single_shot.flush"):
+                    cam.flush()
             return self._decode_buffer(buf, image_bytes)
         except Exception as e:
             if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
@@ -230,13 +271,18 @@ class MaranaCamera:
         try:
             while True:
                 buf = np.empty(image_bytes, dtype=np.uint8)
-                cam.queue(buf, image_bytes)
-                cam.AcquisitionStart()
+                with self._sdk_call("live.queue"):
+                    cam.queue(buf, image_bytes)
+                with self._sdk_call("live.AcquisitionStart"):
+                    cam.AcquisitionStart()
                 try:
-                    cam.wait_buffer(timeout=int(2000 + 1000 * (exposure_s or 0.05)))
+                    with self._sdk_call("live.wait_buffer"):
+                        cam.wait_buffer(timeout=int(2000 + 1000 * (exposure_s or 0.05)))
                 finally:
-                    cam.AcquisitionStop()
-                    cam.flush()
+                    with self._sdk_call("live.AcquisitionStop"):
+                        cam.AcquisitionStop()
+                    with self._sdk_call("live.flush"):
+                        cam.flush()
                 yield self._decode_buffer(buf, image_bytes)
                 if inter_frame_sleep_s > 0:
                     time.sleep(inter_frame_sleep_s)
@@ -301,21 +347,27 @@ class MaranaCamera:
         width = int(cam.AOIWidth)
         frames = np.zeros((frame_count, height, width), dtype=np.uint16)
 
-        ring_size = min(16, frame_count)
+        # Larger ring = more frames the camera can fill while we decode, reducing
+        # buffer-starvation stalls in continuous mode (which show up as a
+        # wait_buffer timeout near the end of a fast burst).
+        ring_size = min(64, frame_count)
         ring = [np.empty(image_bytes, dtype=np.uint8) for _ in range(ring_size)]
 
         t0 = time.monotonic()
         done = 0
         try:
-            for r in range(ring_size):
-                cam.queue(ring[r], image_bytes)
-            cam.AcquisitionStart()
+            with self._sdk_call("kinetic.queue_initial"):
+                for r in range(ring_size):
+                    cam.queue(ring[r], image_bytes)
+            with self._sdk_call("kinetic.AcquisitionStart"):
+                cam.AcquisitionStart()
             try:
                 for i in range(frame_count):
                     if stop_flag.is_set():
                         break
                     try:
-                        cam.wait_buffer(timeout=int(2000 + 1000 * exposure_s))
+                        with self._sdk_call("kinetic.wait_buffer"):
+                            cam.wait_buffer(timeout=int(2000 + 1000 * exposure_s))
                     except Exception as e:
                         if "TIMEDOUT" in str(e).upper() or "TIMEOUT" in str(e).upper():
                             # A stall (camera stopped delivering) — finish with the
@@ -330,14 +382,17 @@ class MaranaCamera:
                     done += 1
                     next_q = i + ring_size
                     if next_q < frame_count:
-                        cam.queue(ring[i % ring_size], image_bytes)
+                        with self._sdk_call("kinetic.requeue"):
+                            cam.queue(ring[i % ring_size], image_bytes)
                     if on_progress is not None:
                         elapsed = time.monotonic() - t0
                         fps = done / elapsed if elapsed > 0 else 0.0
                         on_progress(done, frame_count, fps)
             finally:
-                cam.AcquisitionStop()
-                cam.flush()
+                with self._sdk_call("kinetic.AcquisitionStop"):
+                    cam.AcquisitionStop()
+                with self._sdk_call("kinetic.flush"):
+                    cam.flush()
         finally:
             try:
                 cam.CycleMode = "Fixed"
@@ -352,22 +407,23 @@ class MaranaCamera:
         """Best-effort cooling readout. Returns defaults for fields the camera doesn't expose."""
         cam = self._require()
         out = {"enabled": False, "target_c": 0.0, "sensor_temp_c": 0.0, "status": "Unknown"}
-        try:
-            out["enabled"] = bool(cam.SensorCooling)
-        except Exception:
-            pass
-        try:
-            out["target_c"] = float(cam.TargetSensorTemperature)
-        except Exception:
-            pass
-        try:
-            out["sensor_temp_c"] = float(cam.SensorTemperature)
-        except Exception:
-            pass
-        try:
-            out["status"] = str(cam.TemperatureStatus)
-        except Exception:
-            pass
+        with self._sdk_call("get_cooling"):
+            try:
+                out["enabled"] = bool(cam.SensorCooling)
+            except Exception:
+                pass
+            try:
+                out["target_c"] = float(cam.TargetSensorTemperature)
+            except Exception:
+                pass
+            try:
+                out["sensor_temp_c"] = float(cam.SensorTemperature)
+            except Exception:
+                pass
+            try:
+                out["status"] = str(cam.TemperatureStatus)
+            except Exception:
+                pass
         return out
 
     def set_cooling(self, enable: bool, target_c: float | None = None) -> None:

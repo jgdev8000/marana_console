@@ -48,6 +48,7 @@ class CameraWorker(threading.Thread):
         self._state = WorkerState.IDLE
         self._cancel_evt = threading.Event()
         self._heartbeat = time.monotonic()   # updated each run-loop iteration
+        self._current_cmd: tuple[str, float] | None = None  # (cmd, start) for wedge reports
         self._live_thread: threading.Thread | None = None
         self._kinetic_thread: threading.Thread | None = None
         self._kinetic_frames = None  # np.ndarray (N, H, W) or None
@@ -109,6 +110,27 @@ class CameraWorker(threading.Thread):
         handler wedges the worker — the watchdog uses this to trigger a restart."""
         return self._heartbeat
 
+    def describe_activity(self) -> str:
+        """One-line summary of what the worker is doing, surfaced by the watchdog
+        when the heartbeat goes stale so the journal shows the live⇄stop⇄snap
+        context plus the in-flight SDK call and which acquisition threads are up."""
+        parts = [f"state={self._state.value}"]
+        cur = self._current_cmd
+        if cur is not None:
+            parts.append(f"cmd={cur[0]}({time.monotonic() - cur[1]:.0f}s)")
+        try:
+            act = self._camera.current_activity()
+            if act and act != "idle":
+                parts.append(f"sdk={act}")
+        except Exception:
+            pass
+        for name, t in (("live", self._live_thread),
+                        ("kinetic", self._kinetic_thread),
+                        ("focus", self._focus_thread)):
+            if t is not None and t.is_alive():
+                parts.append(f"{name}-thread-alive")
+        return " ".join(parts)
+
     def _idle_tick(self) -> None:
         try:
             cooling = self._camera.get_cooling()
@@ -139,6 +161,12 @@ class CameraWorker(threading.Thread):
         "get_focus_status": "_h_get_focus_status",
     }
 
+    # High-frequency pollers/getters logged at DEBUG; everything else (the
+    # state-changing commands) at INFO so the command trail before a wedge is
+    # readable without per-frame spam.
+    QUIET_CMDS = {"get_kinetic_status", "get_focus_status", "get_kinetic_frame",
+                  "get_feature", "list_features"}
+
     def _dispatch(self, cmd: str, args: dict, reply: _Reply | None) -> None:
         handler_name = self.HANDLERS.get(cmd)
         if handler_name is None:
@@ -149,6 +177,10 @@ class CameraWorker(threading.Thread):
                 self._publish_error(err)
             return
         handler = getattr(self, handler_name)
+        log.log(logging.DEBUG if cmd in self.QUIET_CMDS else logging.INFO,
+                "cmd %s state=%s", cmd, self._state.value)
+        self._current_cmd = (cmd, time.monotonic())
+        t0 = time.monotonic()
         try:
             result = handler(args)
             if reply:
@@ -164,6 +196,11 @@ class CameraWorker(threading.Thread):
                 reply(None, e)
             else:
                 self._publish_error(e)
+        finally:
+            self._current_cmd = None
+            dt = time.monotonic() - t0
+            if dt >= 1.0:
+                log.warning("cmd %s took %.2fs", cmd, dt)
 
     # --- handlers ---------------------------------------------------------
 
