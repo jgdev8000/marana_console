@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """FOCUS tab — through-focus series controls."""
 from __future__ import annotations
 
@@ -43,29 +44,22 @@ class FocusPanel(QtWidgets.QWidget):
         self.src_real.toggled.connect(self._on_source_toggle)
         self.src_sim.toggled.connect(self._on_source_toggle)
 
-        # Range card
+        # Range card (direction is now fixed: negative‑first)
         rng = self._card("RANGE")
         grid = QtWidgets.QGridLayout()
         rng.layout().addLayout(grid)
-        grid.addWidget(QtWidgets.QLabel("Direction:"), 0, 0)
-        dir_row = QtWidgets.QHBoxLayout()
-        self.dir_pos = QtWidgets.QRadioButton("+")
-        self.dir_neg = QtWidgets.QRadioButton("−")
-        self.dir_pos.setChecked(True)
-        dir_row.addWidget(self.dir_pos); dir_row.addWidget(self.dir_neg)
-        grid.addLayout(dir_row, 0, 1)
-        grid.addWidget(QtWidgets.QLabel("Range (µm):"), 1, 0)
+        grid.addWidget(QtWidgets.QLabel("Range (µm):"), 0, 0)
         self.range_spin = QtWidgets.QDoubleSpinBox()
         self.range_spin.setRange(0.001, 20000.0)
         self.range_spin.setDecimals(3)
         self.range_spin.setValue(100.0)
-        grid.addWidget(self.range_spin, 1, 1)
-        grid.addWidget(QtWidgets.QLabel("Step (µm):"), 2, 0)
+        grid.addWidget(self.range_spin, 0, 1)
+        grid.addWidget(QtWidgets.QLabel("Step (µm):"), 1, 0)
         self.step_spin = QtWidgets.QDoubleSpinBox()
         self.step_spin.setRange(0.001, 20000.0)
         self.step_spin.setDecimals(3)
         self.step_spin.setValue(5.0)
-        grid.addWidget(self.step_spin, 2, 1)
+        grid.addWidget(self.step_spin, 1, 1)
         self.derived_label = QtWidgets.QLabel("Stops: --    End Z: --")
         self.derived_label.setStyleSheet("color: #94a3b8;")
         rng.layout().addWidget(self.derived_label)
@@ -76,7 +70,6 @@ class FocusPanel(QtWidgets.QWidget):
 
         for w in (self.range_spin, self.step_spin):
             w.valueChanged.connect(self._refresh_derived)
-        self.dir_pos.toggled.connect(self._refresh_derived)
 
         # Acquisition card
         acq = self._card("ACQUISITION")
@@ -149,15 +142,14 @@ class FocusPanel(QtWidgets.QWidget):
         return PV_BASE_REAL if self.src_real.isChecked() else PV_BASE_SIM
 
     def direction(self) -> int:
-        return 1 if self.dir_pos.isChecked() else -1
+        """Direction is fixed to -1 (negative‑first) for the new sweep."""
+        return -1
 
     def _on_source_toggle(self, checked: bool) -> None:
-        # toggled fires twice (once for each radio); only act on the becomes-checked one
         if not checked:
             return
         which = "real" if self.src_real.isChecked() else "sim"
         self.requestSetMoverSource.emit(which)
-        # Re-fetch Start Z for the newly chosen mover
         self.requestRefreshStartZ.emit(self.mover_pv_base())
 
     def set_start_z_um(self, z_um: float, dllm_um: float | None = None, dhlm_um: float | None = None) -> None:
@@ -178,8 +170,6 @@ class FocusPanel(QtWidgets.QWidget):
             self.src_real.setChecked(True)
         else:
             self.src_sim.setChecked(True)
-        if cfg.get("focus_direction", 1) == -1:
-            self.dir_neg.setChecked(True)
         self.range_spin.setValue(float(cfg.get("focus_range_um", 100.0)))
         self.step_spin.setValue(float(cfg.get("focus_step_um", 5.0)))
         self.exposure_spin.setValue(float(cfg.get("focus_exposure_s", 0.05)))
@@ -189,7 +179,7 @@ class FocusPanel(QtWidgets.QWidget):
     def current_params(self) -> dict:
         return {
             "mover_pv_base": self.mover_pv_base(),
-            "direction": self.direction(),
+            "direction": -1,
             "range_um": float(self.range_spin.value()),
             "step_um": float(self.step_spin.value()),
             "exposure_s": float(self.exposure_spin.value()),
@@ -203,11 +193,12 @@ class FocusPanel(QtWidgets.QWidget):
         if step <= 0:
             self.derived_label.setText("Stops: --    End Z: --")
             return
-        stops = int(rng // step) + 1
+        half_steps = int((rng / 2) // step)
+        stops = 1 + 2 * half_steps
         if self._start_z_um is None:
             self.derived_label.setText(f"Stops: {stops}    End Z: --")
         else:
-            end_z = self._start_z_um + (stops - 1) * step * self.direction()
+            end_z = self._start_z_um + half_steps * step
             self.derived_label.setText(f"Stops: {stops}    End Z: {end_z:+.3f} µm")
         per_step = max(0.02, step * 1e-3) + self.settle_spin.value() / 1000.0 + self.exposure_spin.value() + 0.05
         self.est_label.setText(f"Est. time: {stops * per_step:.1f} s")
@@ -216,7 +207,6 @@ class FocusPanel(QtWidgets.QWidget):
         self.requestStartFocus.emit(self.current_params())
 
     def on_plan_reply(self, plan: dict) -> None:
-        """Server replied to start_focus. Show a confirmation dialog with the plan."""
         box = QtWidgets.QMessageBox(self)
         box.setIcon(QtWidgets.QMessageBox.Icon.Question)
         box.setWindowTitle("Confirm through-focus series")
@@ -249,3 +239,4 @@ class FocusPanel(QtWidgets.QWidget):
         self.save_btn.setEnabled(done > 0)
         msg = "Cancelled" if partial else "Complete"
         self.progress_label.setText(f"{msg}: {done} frames captured")
+```

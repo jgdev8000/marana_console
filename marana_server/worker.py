@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """CameraWorker — single thread that owns the camera and dispatches commands."""
 from __future__ import annotations
 
@@ -207,8 +208,6 @@ class CameraWorker(threading.Thread):
     def _h_get_feature(self, args: dict) -> dict:
         name = args["name"]
         out = {"name": name, "value": self._camera.get_feature(name)}
-        # If the feature is an enum, include its options. Sweep failures silently
-        # (non-enum features raise). Only include if result is a list of strings.
         try:
             options = self._camera.enum_options(name)
             if isinstance(options, list):
@@ -300,7 +299,6 @@ class CameraWorker(threading.Thread):
                     it.close()
                     break
                 self._publish_live_frame(frame)
-                # Cooling poll piggy-backs on live cadence
                 try:
                     cooling = self._camera.get_cooling()
                     self._publish_temperature(cooling)
@@ -372,14 +370,8 @@ class CameraWorker(threading.Thread):
     def _h_confirm_kinetic(self, args: dict) -> dict:
         if self._kinetic_pending_args is None:
             raise ValueError("no kinetic pending; call start_kinetic first")
-        # Matches the BL11.3.2 ICE server contract: caller must stop any
-        # in-flight acquisition before starting a new one. Two SDK threads
-        # racing on the same camera handle produce AT_ERR_TIMEDOUT after a
-        # handful of frames.
         if self._state != WorkerState.IDLE:
-            raise RuntimeError(
-                f"Must call stop first; current state is {self._state.value}"
-            )
+            raise RuntimeError(f"Must call stop first; current state is {self._state.value}")
         k = self._kinetic_pending_args
         self._kinetic_pending_args = None
         self._cancel_evt.clear()
@@ -415,15 +407,13 @@ class CameraWorker(threading.Thread):
 
     def _kinetic_loop(self, k: dict) -> None:
         total_frames = k["frame_count"]
-        last_pub = [0.0]   # mutable cell for the closure
+        last_pub = [0.0]
 
         def on_progress(done, total, fps):
             self._kinetic_status = {
                 "frames_done": done, "frames_total": total,
                 "achieved_fps": fps, "elapsed_s": self._kinetic_status.get("elapsed_s", 0.0),
             }
-            # Publish at most ~10 Hz (and always the final frame) so high-rate
-            # bursts aren't throttled by per-frame msgpack/ZMQ churn.
             now = time.monotonic()
             if done == total_frames or now - last_pub[0] >= 0.1:
                 last_pub[0] = now
@@ -441,14 +431,10 @@ class CameraWorker(threading.Thread):
                 "achieved_fps": done / elapsed if elapsed > 0 else 0.0,
                 "elapsed_s": elapsed,
             }
-            self._outq.put(m.make_status(m.TOPIC_KINETIC_COMPLETE, {
-                **self._kinetic_status, "partial": partial,
-            }))
+            self._outq.put(m.make_status(m.TOPIC_KINETIC_COMPLETE, {**self._kinetic_status, "partial": partial}))
         except Exception as e:
             log.exception("kinetic loop error")
             self._publish_error(e)
-            # Recover the client UI: emit a (partial) completion so START re-enables
-            # instead of the panel looking hung in an unrecoverable state.
             st = self._kinetic_status
             self._outq.put(m.make_status(m.TOPIC_KINETIC_COMPLETE, {
                 "frames_done": st.get("frames_done", 0),
@@ -464,16 +450,20 @@ class CameraWorker(threading.Thread):
     # --- focus -----------------------------------------------------------
 
     def _h_start_focus(self, args: dict) -> dict:
+        """Start a through‑focus series that first moves **negative half the user‑defined range**
+        (silently), captures the first frame at the negative extreme, then sweeps
+        **forward**, capturing a frame after each step.  The total number of
+        captured frames is ``1 + 2*half_steps`` where ``half_steps`` = floor((range/2)/step).
+        """
         from marana_proto.errors import FeatureValueOutOfRange
         mover_pv_base = str(args["mover_pv_base"])
-        direction = int(args["direction"])
+        # direction forced to -1 (negative‑first)
+        direction = -1
         range_um = float(args["range_um"])
         step_um = float(args["step_um"])
         exposure_s = float(args["exposure_s"])
         settle_ms = int(args["settle_ms"])
         return_to_start = bool(args["return_to_start"])
-        if direction not in (-1, 1):
-            raise ValueError(f"direction must be ±1, got {direction}")
         if range_um <= 0:
             raise ValueError("range_um must be > 0")
         if step_um <= 0:
@@ -488,9 +478,11 @@ class CameraWorker(threading.Thread):
         finally:
             mover.close()
 
-        step_mm = step_um * 1e-3 * direction
-        stop_count = int(range_um // step_um) + 1
-        z_end_mm = z_start_mm + (stop_count - 1) * step_mm
+        step_abs_mm = step_um * 1e-3
+        half_steps = int((range_um / 2) // step_um)
+        stop_count = 1 + 2 * half_steps
+        z_end_mm = z_start_mm + half_steps * step_abs_mm
+
         margin_mm = 1e-6
         z_min_mm = min(z_start_mm, z_end_mm)
         z_max_mm = max(z_start_mm, z_end_mm)
@@ -500,7 +492,7 @@ class CameraWorker(threading.Thread):
                 f"plan spans {z_min_mm:.3f}..{z_max_mm:.3f} mm"
             )
 
-        per_step_s = max(0.02, abs(step_mm)) + settle_ms / 1000.0 + exposure_s + 0.05
+        per_step_s = max(0.02, step_abs_mm) + settle_ms / 1000.0 + exposure_s + 0.05
         est_time_s = stop_count * per_step_s
 
         self._focus_pending_params = {
@@ -512,7 +504,8 @@ class CameraWorker(threading.Thread):
             "settle_ms": settle_ms,
             "return_to_start": return_to_start,
             "z_start_mm": z_start_mm,
-            "stop_count": stop_count,
+            "half_steps": half_steps,
+            "step_abs_mm": step_abs_mm,
         }
         return {
             "z_start_um": z_start_mm * 1e3,
@@ -530,14 +523,11 @@ class CameraWorker(threading.Thread):
         if self._focus_pending_params is None:
             raise ValueError("no focus pending; call start_focus first")
         if self._state != WorkerState.IDLE:
-            raise RuntimeError(
-                f"Must call stop first; current state is {self._state.value}"
-            )
+            raise RuntimeError(f"Must call stop first; current state is {self._state.value}")
         params = self._focus_pending_params
         self._focus_pending_params = None
         self._cancel_evt.clear()
         self._set_state(WorkerState.FOCUS)
-        # Per-series mover handle; created on confirm so the loop owns it.
         self._focus_mover = EpicsMover(params["mover_pv_base"])
         self._focus_thread = threading.Thread(
             target=self._focus_loop, args=(params,), name="FocusLoop", daemon=True,
@@ -547,8 +537,6 @@ class CameraWorker(threading.Thread):
 
     def _h_cancel_focus(self, args: dict) -> dict:
         self._cancel_evt.set()
-        # Touch .STOP from the dispatch thread to interrupt wait_done blocking
-        # in the focus thread. Safe because pyepics PV.put is internally locked.
         mover = self._focus_mover
         if mover is not None:
             try:
@@ -565,8 +553,8 @@ class CameraWorker(threading.Thread):
         mover = self._focus_mover
         try:
             z_start_mm = params["z_start_mm"]
-            stop_count = params["stop_count"]
-            step_mm = params["step_um"] * 1e-3 * params["direction"]
+            half_steps = params["half_steps"]
+            step_abs_mm = params["step_abs_mm"]
             settle_s = params["settle_ms"] / 1000.0
             exposure_s = params["exposure_s"]
             move_timeout_s = max(2.0, abs(params["range_um"]) * 1e-3 * 2.0 + 1.0)
@@ -575,15 +563,31 @@ class CameraWorker(threading.Thread):
             self._camera._configure_single_frame_mode(exposure_s=exposure_s)
             h = int(self._camera.get_feature("AOIHeight"))
             w = int(self._camera.get_feature("AOIWidth"))
-            frames = np.zeros((stop_count, h, w), dtype=np.uint16)
+            total_frames = 1 + 2 * half_steps
+            frames = np.zeros((total_frames, h, w), dtype=np.uint16)
             z_positions_um: list[float] = []
 
-            t0 = time.monotonic()
-            done = 0
-            for i in range(stop_count):
+            # --------------------------------------------------------------
+            # 1. Move negative half‑range silently (no frames)
+            for i in range(1, half_steps + 1):
+                mover.move(z_start_mm - i * step_abs_mm)
+                mover.wait_done(timeout_s=move_timeout_s, settle_s=settle_s)
+            # Now at the negative extreme
+            neg_extreme_mm = z_start_mm - half_steps * step_abs_mm
+
+            # --------------------------------------------------------------
+            # 2. Capture first frame at the negative extreme
+            frame = self._camera.single_shot(timeout_ms=int(2000 + 1000 * exposure_s))
+            frames[0] = frame
+            z_positions_um.append(neg_extreme_mm * 1e3)
+            self._publish_focus_frame(0, total_frames, neg_extreme_mm * 1e3, frame)
+
+            # --------------------------------------------------------------
+            # 3. Forward sweep – capture a frame after every step
+            for idx in range(1, total_frames):
                 if self._cancel_evt.is_set():
                     break
-                target_mm = z_start_mm + i * step_mm
+                target_mm = neg_extreme_mm + idx * step_abs_mm
                 mover.move(target_mm)
                 try:
                     mover.wait_done(timeout_s=move_timeout_s, settle_s=settle_s)
@@ -594,17 +598,18 @@ class CameraWorker(threading.Thread):
                     break
                 actual_mm = mover.read_rbv_mm()
                 frame = self._camera.single_shot(timeout_ms=int(2000 + 1000 * exposure_s))
-                frames[i] = frame
+                frames[idx] = frame
                 z_positions_um.append(actual_mm * 1e3)
-                done += 1
                 self._focus_status = {
-                    "frames_done": done, "frames_total": stop_count,
+                    "frames_done": idx + 1,
+                    "frames_total": total_frames,
                     "current_z_um": actual_mm * 1e3,
                     "elapsed_s": time.monotonic() - t0,
                 }
-                self._publish_focus_frame(i, stop_count, actual_mm * 1e3, frame)
+                self._publish_focus_frame(idx, total_frames, actual_mm * 1e3, frame)
 
-            # Optional return to start (best-effort)
+            # --------------------------------------------------------------
+            # 4. Optional return‑to‑start (no extra frame)
             returned = False
             if params["return_to_start"]:
                 try:
@@ -616,12 +621,15 @@ class CameraWorker(threading.Thread):
                     log.warning("return-to-start failed: %s", e)
                     self._publish_error(e)
 
+            # --------------------------------------------------------------
+            # 5. Store results and build metadata
+            done = min(total_frames, len(z_positions_um))
             self._focus_frames = frames[:done]
             self._focus_z_positions = z_positions_um
             self._focus_meta = {
                 "mover_pv_base": params["mover_pv_base"],
                 "z_start_um": z_start_mm * 1e3,
-                "direction": params["direction"],
+                "direction": -1,
                 "range_um": params["range_um"],
                 "step_um": params["step_um"],
                 "settle_ms": params["settle_ms"],
@@ -631,8 +639,9 @@ class CameraWorker(threading.Thread):
                 "achieved_elapsed_s": time.monotonic() - t0,
             }
             self._outq.put(m.make_status(m.TOPIC_FOCUS_COMPLETE, {
-                "frames_done": done, "frames_total": stop_count,
-                "partial": done < stop_count,
+                "frames_done": done,
+                "frames_total": total_frames,
+                "partial": done < total_frames,
                 "z_positions_um": list(z_positions_um),
                 "z_start_um": z_start_mm * 1e3,
                 "returned_to_start": returned,
