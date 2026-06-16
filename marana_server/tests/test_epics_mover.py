@@ -1,6 +1,6 @@
 """Tests for EpicsMover. Requires the sim IOC (MCS2SIM:) to be running.
 
-Run `./deploy/sim/start-mcs2-sim.sh` in another terminal first; if MCS2SIM:mask_z
+Run `./deploy/sim/start-mcs2-sim.sh` in another terminal first; if MCS2SIM:zoneplate_z
 is not reachable, every test pytest.skips with a helpful message.
 """
 import os
@@ -13,7 +13,7 @@ epics = pytest.importorskip("epics")
 from marana_server.epics_mover import EpicsMover
 from marana_proto.errors import CameraDisconnected, AcquisitionTimeout
 
-PV_BASE = os.environ.get("MARANA_MOVER_PV_BASE", "MCS2SIM:mask_z")
+PV_BASE = os.environ.get("MARANA_MOVER_PV_BASE", "MCS2SIM:zoneplate_z")
 
 
 @pytest.fixture
