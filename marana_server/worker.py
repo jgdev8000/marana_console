@@ -481,11 +481,15 @@ class CameraWorker(threading.Thread):
         step_abs_mm = step_um * 1e-3
         half_steps = int((range_um / 2) // step_um)
         stop_count = 1 + 2 * half_steps
+        # Sweep is symmetric about z_start: it descends to the negative extreme
+        # first, then sweeps up to the positive extreme. Both ends must be
+        # checked against the soft limits.
+        z_neg_mm = z_start_mm - half_steps * step_abs_mm
         z_end_mm = z_start_mm + half_steps * step_abs_mm
 
         margin_mm = 1e-6
-        z_min_mm = min(z_start_mm, z_end_mm)
-        z_max_mm = max(z_start_mm, z_end_mm)
+        z_min_mm = min(z_neg_mm, z_start_mm, z_end_mm)
+        z_max_mm = max(z_neg_mm, z_start_mm, z_end_mm)
         if z_min_mm < dllm_mm + margin_mm or z_max_mm > dhlm_mm - margin_mm:
             raise FeatureValueOutOfRange(
                 f"Z range exceeds limits ({dllm_mm:.3f}..{dhlm_mm:.3f} mm); "
@@ -567,11 +571,19 @@ class CameraWorker(threading.Thread):
             frames = np.zeros((total_frames, h, w), dtype=np.uint16)
             z_positions_um: list[float] = []
 
+            t0 = time.monotonic()
+
             # --------------------------------------------------------------
             # 1. Move negative half‑range silently (no frames)
             for i in range(1, half_steps + 1):
+                if self._cancel_evt.is_set():
+                    break
                 mover.move(z_start_mm - i * step_abs_mm)
-                mover.wait_done(timeout_s=move_timeout_s, settle_s=settle_s)
+                try:
+                    mover.wait_done(timeout_s=move_timeout_s, settle_s=settle_s)
+                except Exception as e:
+                    self._publish_error(e)
+                    break
             # Now at the negative extreme
             neg_extreme_mm = z_start_mm - half_steps * step_abs_mm
 

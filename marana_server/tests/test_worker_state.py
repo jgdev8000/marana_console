@@ -167,9 +167,11 @@ def test_start_focus_returns_plan(worker):
             "settle_ms": 50,
             "return_to_start": True,
         })
-    assert result["stop_count"] == 11  # 100/10 + 1
+    # bidirectional: half_steps = floor((100/2)/10) = 5 -> stop_count = 1 + 2*5 = 11
+    assert result["stop_count"] == 11
     assert result["z_start_um"] == pytest.approx(0.0)
-    assert result["z_end_um"] == pytest.approx(100.0)
+    # z_end_um is the positive extreme: z_start + half_steps*step = 0 + 5*10 = 50
+    assert result["z_end_um"] == pytest.approx(50.0)
     assert result["dllm_mm"] == pytest.approx(-10.5)
     assert result["dhlm_mm"] == pytest.approx(10.5)
     assert "est_time_s" in result
@@ -246,13 +248,14 @@ def test_focus_loop_steps_through_positions(cam_with_live):
             except Exception:
                 pass
         assert complete_payload is not None
-        assert complete_payload["frames_total"] == 5  # 40/10 + 1
+        # bidirectional: half_steps = floor((40/2)/10) = 2 -> total = 1 + 2*2 = 5
+        assert complete_payload["frames_total"] == 5
         assert complete_payload["frames_done"] == 5
         assert complete_payload["partial"] is False
         assert len(complete_payload["z_positions_um"]) == 5
-        # Mover.move called 5 times (plan) + 1 (return to start) = 6
-        assert fake_mover.move.call_count == 6
-        assert progress_count == 5
+        # Moves: 2 silent descent + 4 forward sweep + 1 return-to-start = 7
+        assert fake_mover.move.call_count == 7
+        assert progress_count == 5  # frame 0 (neg extreme) + 4 forward frames
     finally:
         w.shutdown(); w.join(timeout=2.0)
 

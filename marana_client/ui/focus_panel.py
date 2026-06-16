@@ -239,4 +239,3 @@ class FocusPanel(QtWidgets.QWidget):
         self.save_btn.setEnabled(done > 0)
         msg = "Cancelled" if partial else "Complete"
         self.progress_label.setText(f"{msg}: {done} frames captured")
-```
