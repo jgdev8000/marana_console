@@ -413,6 +413,16 @@ def main(argv=None) -> int:
                 status_log.append(f"saved focus stack: {r['path']} ({r['bytes_written']} bytes)", "info")
                 cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
 
+    def _auto_save_focus_stack(done: int, partial: bool):
+        # Auto-save every completed series; server picks focus/<YYMMDD>_N.tif.
+        if done <= 0:
+            return
+        r = safe_req("save_focus_stack", {}, timeout_ms=120_000)
+        if r is not None:
+            tag = " (partial)" if partial else ""
+            status_log.append(
+                f"Auto-saved focus stack{tag}: {r['path']} ({r['bytes_written']} bytes)", "info")
+
     focus.requestStartFocus.connect(_start_focus)
     focus.requestConfirmFocus.connect(lambda: safe_req("confirm_focus", {}))
     focus.requestCancelFocus.connect(lambda: safe_req("cancel_focus", {}))
@@ -461,8 +471,11 @@ def main(argv=None) -> int:
             if quick_acq["active"]:
                 _finish_quick_acquire(header["frames_done"])
         elif topic == m.TOPIC_FOCUS_COMPLETE:
-            focus.on_focus_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
+            done = header["frames_done"]
+            partial = header.get("partial", False)
+            focus.on_focus_complete(done, header["frames_total"], partial)
             win.set_live_indicator(False)
+            _auto_save_focus_stack(done, partial)
         elif topic == m.TOPIC_STATE:
             state = header.get("state")
             status_log.append(f"state: {state}", "info")

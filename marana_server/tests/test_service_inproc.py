@@ -80,7 +80,7 @@ def test_read_motor_rbv(service):
     fake.egu.return_value = "mm"
     with patch("marana_server.service.EpicsMover", return_value=fake):
         reply = _req(ctx, "inproc://test_ctrl", "read_motor_rbv",
-                     {"mover_pv_base": "MCS2SIM:mask_z"})
+                     {"mover_pv_base": "MCS2SIM:zoneplate_z"})
     assert reply["ok"] is True
     assert reply["result"]["z_mm"] == pytest.approx(0.001234)
     assert reply["result"]["z_um"] == pytest.approx(1.234)
@@ -96,7 +96,7 @@ def test_save_focus_stack_writes_tiff(service, tmp_path):
     svc._captures_dir = tmp_path
     svc._worker._focus_frames = np.zeros((3, 8, 8), dtype=np.uint16)
     svc._worker._focus_meta = {
-        "mover_pv_base": "MCS2SIM:mask_z", "z_start_um": 0.0,
+        "mover_pv_base": "MCS2SIM:zoneplate_z", "z_start_um": 0.0,
         "direction": 1, "range_um": 20.0, "step_um": 10.0,
         "settle_ms": 50, "return_to_start": True, "returned_to_start": True,
         "z_positions_um": [0.0, 10.0, 20.0], "achieved_elapsed_s": 1.5,
@@ -105,6 +105,40 @@ def test_save_focus_stack_writes_tiff(service, tmp_path):
     assert reply["ok"] is True
     assert reply["result"]["frames_written"] == 3
     assert (tmp_path / "focus.tif").exists()
+
+
+def test_save_focus_stack_auto_names_first_of_day(service, tmp_path):
+    """No path arg -> server auto-names focus/<YYMMDD>_1.tif for the first of the day."""
+    from datetime import datetime
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    svc._worker._focus_frames = np.zeros((3, 8, 8), dtype=np.uint16)
+    svc._worker._focus_meta = {"z_positions_um": [0.0, 10.0, 20.0]}
+    reply = _req(ctx, "inproc://test_ctrl", "save_focus_stack", {})
+    assert reply["ok"] is True
+    today = datetime.now().strftime("%y%m%d")
+    assert reply["result"]["path"].endswith(f"focus/{today}_1.tif")
+    assert (tmp_path / "focus" / f"{today}_1.tif").exists()
+
+
+def test_save_focus_stack_auto_increments_sequence(service, tmp_path):
+    """N = max(existing today) + 1; other dates and non-matching names ignored."""
+    from datetime import datetime
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    today = datetime.now().strftime("%y%m%d")
+    fdir = tmp_path / "focus"
+    fdir.mkdir()
+    (fdir / f"{today}_1.tif").write_bytes(b"x")
+    (fdir / f"{today}_3.tif").write_bytes(b"x")
+    (fdir / "990101_9.tif").write_bytes(b"x")   # different date -> ignored
+    (fdir / "notes.txt").write_bytes(b"x")        # non-matching -> ignored
+    svc._worker._focus_frames = np.zeros((2, 8, 8), dtype=np.uint16)
+    svc._worker._focus_meta = {"z_positions_um": [0.0, 10.0]}
+    reply = _req(ctx, "inproc://test_ctrl", "save_focus_stack", {})
+    assert reply["ok"] is True
+    assert reply["result"]["path"].endswith(f"focus/{today}_4.tif")
+    assert (fdir / f"{today}_4.tif").exists()
 
 
 def test_get_acq_settings_over_req(service):

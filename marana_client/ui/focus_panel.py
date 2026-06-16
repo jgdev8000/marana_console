@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
-PV_BASE_REAL = "MCS2:mask_z"
-PV_BASE_SIM = "MCS2SIM:mask_z"
+PV_BASE_REAL = "MCS2:zoneplate_z"
+PV_BASE_SIM = "MCS2SIM:zoneplate_z"
 
 
 class FocusPanel(QtWidgets.QWidget):

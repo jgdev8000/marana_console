@@ -159,7 +159,7 @@ def test_start_focus_returns_plan(worker):
     fake_mover = _mover_mock(z_start_mm=0.0)
     with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
         result = w.submit_sync("start_focus", {
-            "mover_pv_base": "MCS2SIM:mask_z",
+            "mover_pv_base": "MCS2SIM:zoneplate_z",
             "direction": 1,
             "range_um": 100.0,
             "step_um": 10.0,
@@ -183,7 +183,7 @@ def test_start_focus_rejects_out_of_range(worker):
     with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
         with pytest.raises(Exception) as ei:
             w.submit_sync("start_focus", {
-                "mover_pv_base": "MCS2SIM:mask_z",
+                "mover_pv_base": "MCS2SIM:zoneplate_z",
                 "direction": 1,
                 "range_um": 5000.0,    # 5 mm → would land at 15 mm, beyond DHLM 10.5
                 "step_um": 100.0,
@@ -211,7 +211,7 @@ def test_confirm_focus_rejects_when_live_running(cam_with_live):
         fake_mover = _mover_mock(z_start_mm=0.0)
         with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
             w.submit_sync("start_focus", {
-                "mover_pv_base": "MCS2SIM:mask_z",
+                "mover_pv_base": "MCS2SIM:zoneplate_z",
                 "direction": 1, "range_um": 50.0, "step_um": 10.0,
                 "exposure_s": 0.001, "settle_ms": 0, "return_to_start": True,
             })
@@ -229,7 +229,7 @@ def test_focus_loop_steps_through_positions(cam_with_live):
     try:
         with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
             w.submit_sync("start_focus", {
-                "mover_pv_base": "MCS2SIM:mask_z",
+                "mover_pv_base": "MCS2SIM:zoneplate_z",
                 "direction": 1, "range_um": 40.0, "step_um": 10.0,
                 "exposure_s": 0.001, "settle_ms": 0, "return_to_start": True,
             })
@@ -260,6 +260,36 @@ def test_focus_loop_steps_through_positions(cam_with_live):
         w.shutdown(); w.join(timeout=2.0)
 
 
+def test_focus_meta_records_swept_range(cam_with_live):
+    """_focus_meta records the actual swept travel (2*half_steps*step), not just requested range."""
+    outq = Queue()
+    w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
+    w.start()
+    fake_mover = _mover_mock(z_start_mm=0.0)
+    try:
+        with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
+            w.submit_sync("start_focus", {
+                "mover_pv_base": "MCS2SIM:zoneplate_z",
+                # range/2 = 15 not divisible by step 10 -> half_steps=1 -> swept=20 (< requested 30)
+                "direction": -1, "range_um": 30.0, "step_um": 10.0,
+                "exposure_s": 0.001, "settle_ms": 0, "return_to_start": False,
+            })
+            w.submit_sync("confirm_focus", {})
+        done = False; t0 = time.monotonic()
+        while time.monotonic() - t0 < 5.0 and not done:
+            try:
+                item = outq.get(timeout=0.1)
+                if item and item[0] == m.TOPIC_FOCUS_COMPLETE:
+                    done = True
+            except Exception:
+                pass
+        assert done
+        assert w._focus_meta["range_um"] == pytest.approx(30.0)       # requested
+        assert w._focus_meta["swept_range_um"] == pytest.approx(20.0)  # actual travel
+    finally:
+        w.shutdown(); w.join(timeout=2.0)
+
+
 def test_cancel_focus_stops_mover(cam_with_live):
     outq = Queue()
     w = CameraWorker(camera=cam_with_live, outbound_queue=outq)
@@ -274,7 +304,7 @@ def test_cancel_focus_stops_mover(cam_with_live):
     try:
         with patch("marana_server.worker.EpicsMover", return_value=fake_mover):
             w.submit_sync("start_focus", {
-                "mover_pv_base": "MCS2SIM:mask_z",
+                "mover_pv_base": "MCS2SIM:zoneplate_z",
                 "direction": 1, "range_um": 100.0, "step_um": 10.0,
                 "exposure_s": 0.001, "settle_ms": 0, "return_to_start": False,
             })

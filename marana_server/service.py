@@ -148,6 +148,25 @@ class MaranaService(threading.Thread):
             "sim": self._sim,
         }
 
+    def _next_focus_path(self) -> str:
+        """Auto-name the next focus stack: focus/<YYMMDD>_N.tif.
+
+        N is a per-day sequence counting focus stacks only (first of the day is
+        _1). Uses max(existing today)+1 so an existing file is never overwritten.
+        """
+        import re
+        from datetime import datetime
+        focus_dir = self._captures_dir / "focus"
+        focus_dir.mkdir(parents=True, exist_ok=True)
+        date = datetime.now().strftime("%y%m%d")
+        pat = re.compile(rf"^{date}_(\d+)\.tif$")
+        n = 0
+        for child in focus_dir.iterdir():
+            mobj = pat.match(child.name)
+            if mobj:
+                n = max(n, int(mobj.group(1)))
+        return f"focus/{date}_{n + 1}.tif"
+
     def _resolve_under_captures(self, path: str) -> Path:
         p = (self._captures_dir / path).resolve()
         # Use Path.is_relative_to to avoid the prefix-string trap where
@@ -204,7 +223,9 @@ class MaranaService(threading.Thread):
         if self._worker._focus_frames is None or len(self._worker._focus_frames) == 0:
             raise ValueError("no focus frames buffered")
         frames = self._worker._focus_frames
-        target = self._resolve_under_captures(args["path"])
+        # No path -> auto-name focus/<YYMMDD>_N.tif; explicit path -> manual save.
+        rel_path = args.get("path") or self._next_focus_path()
+        target = self._resolve_under_captures(rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         cooling = self._cam.get_cooling()
         aoi = self._cam.get_aoi()
