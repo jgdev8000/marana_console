@@ -255,16 +255,38 @@ def main(argv=None) -> int:
 
     def _snap_display():
         # Acquire one fresh frame and show it — no save dialog, nothing written.
+        nonlocal latest_live_frame, latest_live_header
         r = safe_req("snap_single", {"exposure_s": live.exposure_spin.value()}, timeout_ms=60000)
         if r is None:
             return
         arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
+        # Stash as the currently-displayed frame so SAVE / SNAP & SAVE write this one.
+        latest_live_frame = arr
+        latest_live_header = r["header"]
         image_view.update_frame(arr)
         image_view.auto_baseline()   # auto-stretch on every snap (offsets persist)
         status_log.append("snapped frame (display only)", "info")
 
+    def _save_displayed():
+        # Save the currently displayed frame (snap or live); server auto-names <YYMMDD>_N.tif.
+        if latest_live_frame is None:
+            status_log.append("no frame to save — SNAP or start LIVE first", "warn")
+            return
+        frame = latest_live_frame
+        r = safe_req("save_snapshot", {
+            "frame_bytes": frame.tobytes(),
+            "width": int(frame.shape[1]),
+            "height": int(frame.shape[0]),
+            "display": {"rot": image_view.state.rot,
+                        "flip_h": image_view.state.flip_h,
+                        "flip_v": image_view.state.flip_v},
+        }, timeout_ms=120_000)
+        if r is not None:
+            status_log.append(f"saved {r['path']} ({r['bytes_written']} bytes)", "info")
+
     live.requestSnapDisplay.connect(_snap_display)
     live.requestSnapNow.connect(_snap_now)
+    live.requestSaveDisplayed.connect(_save_displayed)
     live.requestAcquireAndSave.connect(_acquire_and_save)
 
     # Kinetic flow — must call `stop` first so the server isn't already in LIVE

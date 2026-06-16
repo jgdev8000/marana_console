@@ -12,6 +12,7 @@ class LivePanel(QtWidgets.QWidget):
     requestStop = QtCore.pyqtSignal()
     requestSnapDisplay = QtCore.pyqtSignal()   # acquire one frame, display only (no save)
     requestSnapNow = QtCore.pyqtSignal()
+    requestSaveDisplayed = QtCore.pyqtSignal()  # save the currently displayed frame
     requestAcquireAndSave = QtCore.pyqtSignal()
     requestSetAoi = QtCore.pyqtSignal(int, int, int, int)
     requestSetAoiFull = QtCore.pyqtSignal()
@@ -99,6 +100,10 @@ class LivePanel(QtWidgets.QWidget):
         self.snap_display_button.setToolTip("Acquire one frame and display it (no save)")
         self.snap_display_button.clicked.connect(self.requestSnapDisplay.emit)
         cap_card.layout().addWidget(self.snap_display_button)
+        self.save_button = QtWidgets.QPushButton("SAVE")
+        self.save_button.setToolTip("Save the currently displayed frame (auto-named, with metadata)")
+        self.save_button.clicked.connect(self.requestSaveDisplayed.emit)
+        cap_card.layout().addWidget(self.save_button)
         self.snap_button = QtWidgets.QPushButton("SNAP && SAVE")
         self.snap_button.clicked.connect(self.requestSnapNow.emit)
         cap_card.layout().addWidget(self.snap_button)

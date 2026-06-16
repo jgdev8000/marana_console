@@ -8,6 +8,19 @@ import numpy as np
 import tifffile
 
 
+def write_single_image(path: str, frame: np.ndarray, metadata: dict) -> int:
+    """Write a (H, W) uint16 array as a single-page TIFF. Returns bytes written."""
+    if frame.ndim != 2 or frame.dtype != np.uint16:
+        raise ValueError(f"frame must be 2-D uint16, got shape={frame.shape} dtype={frame.dtype}")
+    tifffile.imwrite(
+        path,
+        frame,
+        photometric="minisblack",
+        description=json.dumps(metadata, separators=(",", ":")),
+    )
+    return os.path.getsize(path)
+
+
 def write_image_stack(path: str, frames: np.ndarray, metadata: dict) -> int:
     """Write a (N, H, W) uint16 array as a multi-page TIFF. Returns bytes written."""
     if frames.ndim != 3 or frames.dtype != np.uint16:

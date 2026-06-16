@@ -13,7 +13,7 @@ from marana_proto import messages as m
 from marana_proto.errors import MaranaError, to_wire
 from marana_server.publisher import Publisher
 from marana_server.worker import CameraWorker
-from marana_server.io_tiff import write_image_stack
+from marana_server.io_tiff import write_image_stack, write_single_image
 from marana_server.meta import build_metadata
 from marana_server.epics_mover import EpicsMover
 
@@ -115,7 +115,7 @@ class MaranaService(threading.Thread):
             log.exception("dispatch %s failed", cmd)
             return m.make_reply_err(req_id, type(e).__name__, str(e))
 
-    INSTANT_CMDS = {"hello", "save_kinetic_stack", "save_focus_stack",
+    INSTANT_CMDS = {"hello", "save_kinetic_stack", "save_focus_stack", "save_snapshot",
                     "list_kinetic_save_dir", "read_motor_rbv", "shutdown"}
 
     def _dispatch(self, cmd: str, args: dict):
@@ -125,6 +125,8 @@ class MaranaService(threading.Thread):
             return self._cmd_save_kinetic(args)
         if cmd == "save_focus_stack":
             return self._cmd_save_focus_stack(args)
+        if cmd == "save_snapshot":
+            return self._cmd_save_snapshot(args)
         if cmd == "read_motor_rbv":
             return self._cmd_read_motor_rbv(args)
         if cmd == "list_kinetic_save_dir":
@@ -166,6 +168,25 @@ class MaranaService(threading.Thread):
             if mobj:
                 n = max(n, int(mobj.group(1)))
         return f"focus/{date}_{n + 1}.tif"
+
+    def _next_capture_path(self) -> str:
+        """Auto-name the next root capture: <YYMMDD>_N.tif.
+
+        N is a shared per-day counter over root-level captures (snapshots and
+        anything else written to the captures root). Subdirectories such as
+        focus/ are ignored. max(existing today)+1 never overwrites.
+        """
+        import re
+        from datetime import datetime
+        self._captures_dir.mkdir(parents=True, exist_ok=True)
+        date = datetime.now().strftime("%y%m%d")
+        pat = re.compile(rf"^{date}_(\d+)\.tif$")
+        n = 0
+        for child in self._captures_dir.iterdir():
+            mobj = pat.match(child.name)
+            if mobj:
+                n = max(n, int(mobj.group(1)))
+        return f"{date}_{n + 1}.tif"
 
     def _resolve_under_captures(self, path: str) -> Path:
         p = (self._captures_dir / path).resolve()
@@ -248,6 +269,42 @@ class MaranaService(threading.Thread):
         )
         bytes_written = write_image_stack(str(target), frames, meta)
         return {"path": str(target), "bytes_written": bytes_written, "frames_written": int(frames.shape[0])}
+
+    def _cmd_save_snapshot(self, args: dict) -> dict:
+        """Save one client-supplied displayed frame to the captures root.
+
+        Metadata is built from current camera state at save time (mirrors the
+        kinetic/focus saves), so a saved live frame still records real
+        exposure / temp / AOI without per-frame header bloat.
+        """
+        import numpy as np
+        w = int(args["width"])
+        h = int(args["height"])
+        frame = np.frombuffer(args["frame_bytes"], dtype=np.uint16).reshape(h, w).copy()
+        # No path -> auto-name <YYMMDD>_N.tif at root; explicit path -> manual save.
+        rel_path = args.get("path") or self._next_capture_path()
+        target = self._resolve_under_captures(rel_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        cooling = self._cam.get_cooling()
+        aoi = self._cam.get_aoi()
+        meta = build_metadata(
+            camera={"model": self._cam.model, "serial": self._cam.serial, "host": os.uname().nodename},
+            acquisition={
+                "mode": "snapshot",
+                "exposure_s": float(self._cam.get_feature("ExposureTime")),
+                "encoding": str(self._cam.get_feature("PixelEncoding")),
+                "speed_mhz": str(self._cam.get_feature("PixelReadoutRate")),
+                "shutter": str(self._cam.get_feature("ElectronicShutteringMode")),
+                "aoi_0based_inclusive": list(aoi),
+                "binning": [1, 1],
+                "sensor_temp_c": cooling.get("sensor_temp_c", 0.0),
+                "timestamp_iso": _now_iso(),
+                "frame_count": 1,
+            },
+            display=args.get("display"),
+        )
+        bytes_written = write_single_image(str(target), frame, meta)
+        return {"path": str(target), "bytes_written": bytes_written}
 
     def _cmd_list_save_dir(self, args: dict) -> dict:
         sub = args.get("subdir", "")

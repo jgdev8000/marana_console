@@ -86,3 +86,52 @@ No change to `half_steps = floor((range/2)/step)`. Add to `_focus_meta`:
 
 All focus tests patch `EpicsMover` with a `MagicMock`; no channel-access puts —
 the real MCS2 stage is never moved.
+
+---
+
+## Addendum — LIVE tab: SAVE displayed frame (2026-06-16)
+
+### Goal
+
+A SAVE button on the LIVE tab that writes the currently displayed frame (from
+SNAP or a live stream frame) to disk with real metadata, decoupled from
+acquisition (SNAP displays; SAVE writes).
+
+### Decisions
+
+- **Destination**: auto-name at the captures root `<captures>/YYMMDD_N.tif`
+  with a **shared** per-day counter over root-level captures (Q1=c). No dialog;
+  a "saved …" message is logged.
+- **What is saved**: the last frame displayed on the LIVE tab — whether it came
+  from SNAP or a live stream frame (Q2=a).
+
+### Architecture
+
+- **Server** (`marana_server`):
+  - `io_tiff.write_single_image(path, frame, metadata)` — 2-D uint16 single-page
+    TIFF with embedded JSON (mirrors `write_image_stack`).
+  - `service._next_capture_path()` — scans the captures **root** for
+    `^<YYMMDD>_(\d+)\.tif$`, returns `<YYMMDD>_{max+1}.tif`; subdirs (focus/)
+    ignored.
+  - `service._cmd_save_snapshot(args)` — reconstructs the frame from
+    `frame_bytes`/`width`/`height`, auto-names (or explicit `path`), builds
+    metadata from **current camera state** at save time (model/serial/host,
+    exposure, encoding, speed, shutter, AOI, sensor_temp_c, timestamp,
+    `mode=snapshot`) plus client `display` transforms, writes via
+    `write_single_image`. Registered as an instant command.
+  - Building metadata at save time (not from the frame header) means a saved
+    live frame still records real exposure/temp/AOI without per-frame header
+    bloat — same approach as the kinetic/focus saves.
+- **Client** (`marana_client`):
+  - `live_panel`: new `SAVE` button + `requestSaveDisplayed` signal.
+  - `__main__`: `_snap_display` now stashes the snapped frame as the current
+    displayed frame (also fixing SNAP & SAVE to work after a plain SNAP);
+    `_save_displayed` sends `save_snapshot` with the displayed frame bytes +
+    display transforms and logs the returned path.
+
+### Tests (filesystem-only / mocked camera)
+
+- `write_single_image` round-trip + non-2-D rejection.
+- `save_snapshot` auto-names `<YYMMDD>_1.tif` at root and embeds real
+  exposure/temp metadata; increments the shared root counter (ignoring other
+  dates).

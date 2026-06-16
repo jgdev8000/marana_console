@@ -141,6 +141,45 @@ def test_save_focus_stack_auto_increments_sequence(service, tmp_path):
     assert (fdir / f"{today}_4.tif").exists()
 
 
+def test_save_snapshot_auto_names_at_root(service, tmp_path):
+    """save_snapshot with no path -> <captures>/<YYMMDD>_1.tif; metadata from camera state."""
+    import json
+    from datetime import datetime
+    import tifffile
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    frame = np.full((8, 8), 7, dtype=np.uint16)
+    reply = _req(ctx, "inproc://test_ctrl", "save_snapshot",
+                 {"frame_bytes": frame.tobytes(), "width": 8, "height": 8,
+                  "display": {"rot": 0, "flip_h": False, "flip_v": False}})
+    assert reply["ok"] is True
+    today = datetime.now().strftime("%y%m%d")
+    assert reply["result"]["path"].endswith(f"{today}_1.tif")
+    out = tmp_path / f"{today}_1.tif"
+    assert out.exists()
+    with tifffile.TiffFile(out) as tf:
+        arr = tf.asarray()
+        md = json.loads(tf.pages[0].tags.get("ImageDescription").value)
+    np.testing.assert_array_equal(arr, frame)
+    assert md["acquisition"]["exposure_s"] == 0.05       # from get_feature
+    assert md["acquisition"]["sensor_temp_c"] == 20.0    # from get_cooling
+
+
+def test_save_snapshot_increments_shared_root_counter(service, tmp_path):
+    """N = max(existing today at root)+1; other dates and subdirs ignored."""
+    from datetime import datetime
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    today = datetime.now().strftime("%y%m%d")
+    (tmp_path / f"{today}_2.tif").write_bytes(b"x")   # existing root capture
+    (tmp_path / "990101_9.tif").write_bytes(b"x")      # other date -> ignored
+    frame = np.zeros((4, 4), dtype=np.uint16)
+    reply = _req(ctx, "inproc://test_ctrl", "save_snapshot",
+                 {"frame_bytes": frame.tobytes(), "width": 4, "height": 4})
+    assert reply["ok"] is True
+    assert reply["result"]["path"].endswith(f"{today}_3.tif")
+
+
 def test_get_acq_settings_over_req(service):
     svc, ctx = service
     svc._cam.get_acq_settings.return_value = {

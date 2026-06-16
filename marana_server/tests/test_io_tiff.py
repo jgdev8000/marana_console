@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from marana_server.meta import build_metadata
-from marana_server.io_tiff import write_image_stack
+from marana_server.io_tiff import write_image_stack, write_single_image
 
 
 def test_build_metadata_shape():
@@ -44,3 +44,26 @@ def test_write_image_stack_round_trip(tmp_path):
             payload = json.loads(desc.value) if desc.value.startswith("{") else None
             if payload:
                 assert payload.get("frame_count") == 3
+
+
+def test_write_single_image_round_trip(tmp_path):
+    arr = (np.arange(16 * 16, dtype=np.uint16) % 1000).reshape(16, 16)
+    md = {"acquisition": {"exposure_s": 0.05, "sensor_temp_c": -44.8}}
+    path = tmp_path / "snap.tif"
+    written = write_single_image(str(path), arr, md)
+    assert written > 0
+
+    with tifffile.TiffFile(str(path)) as tf:
+        assert len(tf.pages) == 1
+        reread = tf.asarray()
+        desc = tf.pages[0].tags.get("ImageDescription")
+    assert reread.shape == (16, 16)
+    assert reread.dtype == np.uint16
+    np.testing.assert_array_equal(reread, arr)
+    assert json.loads(desc.value)["acquisition"]["exposure_s"] == 0.05
+
+
+def test_write_single_image_rejects_non_2d(tmp_path):
+    arr = np.zeros((2, 4, 4), dtype=np.uint16)
+    with pytest.raises(ValueError):
+        write_single_image(str(tmp_path / "bad.tif"), arr, {})
