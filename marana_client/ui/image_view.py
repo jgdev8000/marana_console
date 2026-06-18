@@ -2,9 +2,9 @@
 an auto-baseline + offset contrast model.
 
 Contrast model:
-- An *auto baseline* (1–99.5% black/white) is established from a frame at trigger
-  points: once when live starts, and on each snapshot. It does NOT recompute every
-  live frame (that would make the view jump constantly).
+- An *auto baseline* (best-fit: data min..max of the frame, like Andor Solis) is
+  recomputed on every frame, so the live view tracks the data and the in-focus
+  peak is never clipped.
 - Two *offsets* (black/white, as a percentage of the auto span) sit on top of the
   baseline and persist frame-to-frame. The slider panel drives these live, so any
   contrast tweak is applied relative to the auto result.
@@ -85,8 +85,11 @@ class MaranaImageView(QtWidgets.QWidget):
         self.auto_baseline()
 
     def _set_baseline_from(self, frame: np.ndarray) -> None:
-        lo, hi = np.percentile(frame, (1.0, 99.5))
-        self._auto_lo, self._auto_hi = float(lo), float(hi)
+        # Best-fit: stretch to the actual data min..max of the frame (matches
+        # Andor Solis "Best Fit"). This never clips the in-focus peak, unlike a
+        # high-percentile white point.
+        self._auto_lo = float(frame.min())
+        self._auto_hi = float(frame.max())
         if self._auto_hi <= self._auto_lo:
             self._auto_hi = self._auto_lo + 1.0
 
@@ -112,10 +115,9 @@ class MaranaImageView(QtWidgets.QWidget):
         if frame is None or frame.size == 0:
             return
         self._last_raw = frame
-        # Establish a baseline lazily on the very first frame so there's always
-        # something sensible to display before an explicit trigger fires.
-        if self._auto_lo is None:
-            self._set_baseline_from(frame)
+        # Best-fit auto re-scales on every frame (live tracks the data, like
+        # Solis). User black/white offsets still ride on top via _effective_levels.
+        self._set_baseline_from(frame)
         view = self._apply_transform(frame)
         levels = self._effective_levels()
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
