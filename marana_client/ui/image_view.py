@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Auto-contrast bias applied on top of the best-fit (min..max) window, as a
 # percentage of the data span, to approximate Andor Solis's auto. Tune here.
@@ -46,17 +46,22 @@ class MaranaImageView(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Black backdrop for the whole central area, incl. gaps and the empty grid
+        # corner (palette + autoFillBackground works for a plain QWidget subclass,
+        # which ignores a stylesheet background by default).
+        pal = self.palette()
+        pal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#000000"))
+        self.setPalette(pal)
+        self.setAutoFillBackground(True)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self._full_scale = 65535
         self.image_item = pg.ImageView()
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
         self.image_item.ui.histogram.hide()   # contrast lives on the side panel boxes + Auto
         self.image_item.getView().setBackgroundColor("k")
-        # Black backdrop for the whole image area (fills the empty grid corner too).
-        self.setObjectName("imageArea")
-        self.setStyleSheet("QWidget#imageArea { background-color: #000; }")
 
         # Solis-style layout: vertical line profile (left), image (centre),
         # horizontal line profile (bottom), pixel readout strip (very bottom).
