@@ -162,6 +162,7 @@ class MaranaImageView(QtWidgets.QWidget):
         if self._lo is None or self._hi is None:
             return
         self.image_item.setLevels(self._lo, self._hi)
+        self._set_profile_ranges()
         self.levelsChanged.emit(self._lo, self._hi)
 
     # --- rendering --------------------------------------------------------
@@ -189,6 +190,7 @@ class MaranaImageView(QtWidgets.QWidget):
         elif self._lo is not None:
             # Re-assert current levels (setImage can reset them) without recomputing.
             self.image_item.setLevels(self._lo, self._hi)
+            self._set_profile_ranges()
 
     def _on_mouse_moved(self, scene_pos) -> None:
         """Update the pixel readout and the row/column line profiles for the cursor."""
@@ -232,6 +234,19 @@ class MaranaImageView(QtWidgets.QWidget):
         self.horiz_cursor.setValue(cc)
         self.vert_curve.setData(self._last_raw[:, cc], np.arange(H))   # x=intensity, y=row
         self.vert_cursor.setValue(rr)
+
+    def _set_profile_ranges(self) -> None:
+        """Fix the profile axes: position to the frame size, intensity to the
+        current black/white window — so a dark, low-variance region reads as a
+        flat line near the bottom instead of an auto-scaled noisy trace."""
+        if self._last_raw is None or self._lo is None:
+            return
+        H, W = self._last_raw.shape
+        lo, hi = self._lo, self._hi
+        self.horiz_profile.setXRange(0, W, padding=0)
+        self.horiz_profile.setYRange(lo, hi, padding=0)
+        self.vert_profile.setYRange(0, H, padding=0)
+        self.vert_profile.setXRange(lo, hi, padding=0)
 
     def _install_aoi_drag(self) -> None:
         """Disable view panning (no value here) and repurpose left-drag to draw
