@@ -456,9 +456,12 @@ def main(argv=None) -> int:
     cooling.requestSetCooling.connect(lambda enable, t: safe_req("cooling_set", {"enable": enable, "target_c": t}))
     disp.requestRotation.connect(image_view.set_rotation)
     disp.requestFlip.connect(image_view.set_flip)
-    contrast.requestOffsets.connect(image_view.set_level_offsets)
-    contrast.requestAuto.connect(lambda: (image_view.reset_auto(), contrast.center(),
-                                          live_auto.update(on=True)))
+    # Levels are the single source of truth, shared with the histogram.
+    contrast.requestSetLevels.connect(lambda lo, hi: (image_view.set_levels(lo, hi),
+                                                      live_auto.update(on=False)))
+    contrast.requestAuto.connect(lambda: (image_view.reset_auto(), live_auto.update(on=True)))
+    image_view.levelsChanged.connect(contrast.set_values)          # auto/drag -> boxes
+    image_view.userEditedLevels.connect(lambda: live_auto.update(on=False))  # drag = manual
 
     # Worker -> GUI updates
     def _on_frame(topic: bytes, header: dict, arr: np.ndarray) -> None:

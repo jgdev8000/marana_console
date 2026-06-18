@@ -1,13 +1,15 @@
 """Image display widget — pyqtgraph ImageView wrapped with display transforms +
-an auto-baseline + offset contrast model.
+a single-source-of-truth contrast model.
 
 Contrast model:
-- An *auto baseline* (best-fit: data min..max of the frame) is recomputed on every
-  frame, so the live view tracks the data. A fixed bias (AUTO_BLACK/WHITE_BIAS_PCT)
-  is added to approximate Andor Solis's auto: black pushed up, white given headroom.
-- Two *offsets* (black/white, as a percentage of the auto span) sit on top of the
-  baseline and persist frame-to-frame. The slider panel drives these live, so any
-  contrast tweak is applied relative to the auto result.
+- The black/white display levels (_lo/_hi, absolute pixel values) are the single
+  source of truth, shared with the image's draggable histogram. Dragging the
+  histogram, typing in the contrast boxes, and 'Auto' all set the same levels;
+  levelsChanged keeps the numeric boxes in sync.
+- Levels PERSIST across frames. update_frame(auto=True) recomputes them per frame
+  (live, after the user presses Auto); otherwise they hold (snaps, manual drags).
+- 'Auto' = best-fit (data min..max) + a fixed bias (AUTO_BLACK/WHITE_BIAS_PCT)
+  approximating Andor Solis: black pushed up, white given headroom.
 """
 from __future__ import annotations
 
@@ -34,6 +36,11 @@ class MaranaImageView(QtWidgets.QWidget):
     # Emitted on mouse-drag release: raw-frame rect (relative to the currently
     # displayed AOI), inclusive: (row0, row1, col0, col1).
     aoiSelected = QtCore.pyqtSignal(int, int, int, int)
+    # Black/white display levels changed (auto, typed, or histogram drag), as
+    # absolute pixel values — the contrast panel mirrors these into its boxes.
+    levelsChanged = QtCore.pyqtSignal(float, float)
+    # The user dragged the histogram handles (vs a programmatic change).
+    userEditedLevels = QtCore.pyqtSignal()
 
     _MIN_DRAG_PX = 4   # ignore tiny drags / clicks
 
@@ -53,10 +60,12 @@ class MaranaImageView(QtWidgets.QWidget):
         self.state = DisplayState()
         self._install_aoi_drag()
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
-        self._auto_lo: float | None = None             # auto baseline black point
-        self._auto_hi: float | None = None             # auto baseline white point
-        self._black_off_pct: int = 0                   # offset, % of auto span
-        self._white_off_pct: int = 0
+        # Single source of truth: the actual black/white display levels (pixel
+        # values). None until the first frame establishes them.
+        self._lo: float | None = None
+        self._hi: float | None = None
+        # Capture user drags of the histogram handles and mirror them into _lo/_hi.
+        self.image_item.ui.histogram.item.sigLevelsChanged.connect(self._on_hist_levels)
 
     # --- display transforms ----------------------------------------------
 
@@ -72,52 +81,52 @@ class MaranaImageView(QtWidgets.QWidget):
 
     # --- contrast ---------------------------------------------------------
 
-    def set_level_offsets(self, black_pct: int, white_pct: int) -> None:
-        """Live black/white offsets (percent of the auto span), applied on top
-        of the current auto baseline."""
-        self._black_off_pct = int(black_pct)
-        self._white_off_pct = int(white_pct)
-        self._rerender()
-
-    def auto_baseline(self) -> None:
-        """Recompute the auto baseline (1–99.5%) from the current frame, keeping
-        the user's offsets. Called once on live-start and on each snap."""
-        if self._last_raw is None:
-            return
-        self._set_baseline_from(self._last_raw)
-        self._rerender()
+    def set_levels(self, lo: float, hi: float) -> None:
+        """Set the black/white levels to absolute pixel values (from the numeric
+        boxes). Persists — not overwritten by later frames unless auto is on."""
+        self._lo, self._hi = float(lo), float(hi)
+        if self._hi <= self._lo:
+            self._hi = self._lo + 1.0
+        self._apply_levels()
 
     def reset_auto(self) -> None:
-        """Auto baseline AND re-center the offsets — the 'Auto' button: pristine
-        auto-stretch."""
-        self._black_off_pct = 0
-        self._white_off_pct = 0
-        self.auto_baseline()
+        """The 'Auto' button: compute best-fit + Solis bias from the current
+        frame and apply it as the levels."""
+        if self._last_raw is None:
+            return
+        self._lo, self._hi = self._auto_levels(self._last_raw)
+        self._apply_levels()
 
-    def _set_baseline_from(self, frame: np.ndarray) -> None:
-        # Best-fit: stretch to the actual data min..max of the frame (matches
-        # Andor Solis "Best Fit"). This never clips the in-focus peak, unlike a
-        # high-percentile white point.
-        self._auto_lo = float(frame.min())
-        self._auto_hi = float(frame.max())
-        if self._auto_hi <= self._auto_lo:
-            self._auto_hi = self._auto_lo + 1.0
-
-    def _effective_levels(self) -> tuple[float, float] | None:
-        if self._auto_lo is None or self._auto_hi is None:
-            return None
-        span = self._auto_hi - self._auto_lo
-        # Auto = best-fit min..max plus a fixed bias that approximates Andor Solis:
-        # raise black ~11% of span (push background toward black) and white ~32%
-        # (leave headroom above the peak so it isn't blown out). User offset
-        # sliders add on top of this.
-        black = (AUTO_BLACK_BIAS_PCT + self._black_off_pct) / 100.0
-        white = (AUTO_WHITE_BIAS_PCT + self._white_off_pct) / 100.0
-        lo = self._auto_lo + black * span
-        hi = self._auto_hi + white * span
+    def _auto_levels(self, frame: np.ndarray) -> tuple[float, float]:
+        # Best-fit (data min..max) plus a fixed bias approximating Andor Solis:
+        # raise black ~11% of span (push background to black) and white ~32%
+        # (headroom above the peak so it isn't blown out).
+        lo0 = float(frame.min())
+        hi0 = float(frame.max())
+        span = max(hi0 - lo0, 1.0)
+        lo = lo0 + (AUTO_BLACK_BIAS_PCT / 100.0) * span
+        hi = hi0 + (AUTO_WHITE_BIAS_PCT / 100.0) * span
         if hi <= lo:
             hi = lo + 1.0
         return (lo, hi)
+
+    def _apply_levels(self) -> None:
+        """Push _lo/_hi to the image + histogram and notify the panel."""
+        if self._lo is None or self._hi is None:
+            return
+        self.image_item.setLevels(self._lo, self._hi)
+        self.levelsChanged.emit(self._lo, self._hi)
+
+    def _on_hist_levels(self) -> None:
+        """Histogram handle drag -> mirror into _lo/_hi (ignore our own programmatic
+        setLevels, which already match)."""
+        lo, hi = self.image_item.ui.histogram.item.getLevels()
+        if (self._lo is not None
+                and abs(lo - self._lo) < 1e-6 and abs(hi - self._hi) < 1e-6):
+            return  # programmatic echo, not a user drag
+        self._lo, self._hi = float(lo), float(hi)
+        self.levelsChanged.emit(self._lo, self._hi)
+        self.userEditedLevels.emit()
 
     # --- rendering --------------------------------------------------------
 
@@ -131,19 +140,21 @@ class MaranaImageView(QtWidgets.QWidget):
         if frame is None or frame.size == 0:
             return
         self._last_raw = frame
-        # Auto is opt-in: the caller passes auto=True per live frame only after
-        # the user presses Auto. Snaps (and live before Auto) hold the current
-        # levels. The very first frame ever still gets a one-time baseline so
-        # the view isn't blank.
-        if auto or self._auto_lo is None:
-            self._set_baseline_from(frame)
+        # Auto is opt-in: caller passes auto=True per live frame only after the
+        # user presses Auto. Otherwise levels persist (snaps and manual drags
+        # hold). The first frame ever gets a one-time auto so the view isn't blank.
+        recompute = auto or self._lo is None
+        if recompute:
+            self._lo, self._hi = self._auto_levels(frame)
         view = self._apply_transform(frame)
-        levels = self._effective_levels()
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
         # Keep the histogram axis pinned to full scale (setImage can nudge it).
         self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
-        if levels is not None:
-            self.image_item.setLevels(levels[0], levels[1])
+        if recompute:
+            self._apply_levels()
+        elif self._lo is not None:
+            # Re-assert current levels (setImage can reset them) without recomputing.
+            self.image_item.setLevels(self._lo, self._hi)
 
     def _install_aoi_drag(self) -> None:
         """Disable view panning (no value here) and repurpose left-drag to draw

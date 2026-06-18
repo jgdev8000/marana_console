@@ -88,14 +88,14 @@ class DisplayPanel(QtWidgets.QFrame):
 
 
 class ContrastPanel(QtWidgets.QFrame):
-    """Contrast = an auto baseline (set on live-start and each snap) plus two
-    fine offset sliders centered at the middle (0 = pure auto). Sliding or
-    arrowing pushes the black/white point relative to the auto result, live.
-    'Auto' re-stretches and re-centers the sliders."""
-    requestOffsets = QtCore.pyqtSignal(int, int)   # black %, white %  (-100..100)
+    """Contrast = black/white display levels in absolute pixel values (0..65535),
+    the single source of truth shared with the image's histogram. Typing a value
+    or dragging the histogram updates the other; 'Auto' computes a best-fit +
+    Solis-like window."""
+    requestSetLevels = QtCore.pyqtSignal(float, float)   # black, white pixel values
     requestAuto = QtCore.pyqtSignal()
 
-    _RANGE = 100   # offset range: ±100% of the auto span
+    _MAX = 65535
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,47 +105,37 @@ class ContrastPanel(QtWidgets.QFrame):
         t = QtWidgets.QLabel("CONTRAST"); t.setObjectName("cardTitle")
         lay.addWidget(t)
 
-        self.black_slider, self.black_label = self._make_row(lay, "Black")
-        self.white_slider, self.white_label = self._make_row(lay, "White")
-        self.black_slider.valueChanged.connect(self._on_change)
-        self.white_slider.valueChanged.connect(self._on_change)
+        self.black_spin = self._make_row(lay, "Black", 0)
+        self.white_spin = self._make_row(lay, "White", self._MAX)
+        self.black_spin.valueChanged.connect(self._on_change)
+        self.white_spin.valueChanged.connect(self._on_change)
 
         auto_btn = QtWidgets.QPushButton("Auto")
-        auto_btn.setToolTip("Reset to auto (best-fit + Solis-like bias) and re-center the offset sliders")
+        auto_btn.setToolTip("Best-fit + Solis-like window from the current frame")
         auto_btn.clicked.connect(self.requestAuto.emit)
         lay.addWidget(auto_btn)
 
-    def _make_row(self, parent_lay, name: str):
-        label = QtWidgets.QLabel(f"{name}: 0")
-        parent_lay.addWidget(label)
+    def _make_row(self, parent_lay, name: str, default: int):
         row = QtWidgets.QHBoxLayout()
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(-self._RANGE, self._RANGE)
-        slider.setValue(0)                 # centered = pure auto
-        left = QtWidgets.QPushButton("◄"); left.setFixedWidth(28)
-        right = QtWidgets.QPushButton("►"); right.setFixedWidth(28)
-        left.setToolTip("nudge −1%"); right.setToolTip("nudge +1%")
-        left.clicked.connect(lambda: slider.setValue(slider.value() - 1))   # arrow = 1% fine step
-        right.clicked.connect(lambda: slider.setValue(slider.value() + 1))
-        row.addWidget(left); row.addWidget(slider, stretch=1); row.addWidget(right)
+        row.addWidget(QtWidgets.QLabel(f"{name}:"))
+        spin = QtWidgets.QSpinBox()
+        spin.setRange(0, self._MAX)
+        spin.setSingleStep(50)
+        spin.setValue(default)
+        row.addWidget(spin, stretch=1)
         parent_lay.addLayout(row)
-        return slider, label
+        return spin
 
     def _on_change(self, _v: int) -> None:
-        black = self.black_slider.value()
-        white = self.white_slider.value()
-        self.black_label.setText(f"Black: {black:+d}%")
-        self.white_label.setText(f"White: {white:+d}%")
-        self.requestOffsets.emit(black, white)
+        self.requestSetLevels.emit(float(self.black_spin.value()), float(self.white_spin.value()))
 
-    def center(self) -> None:
-        """Reset both offset sliders to the middle (pure auto), no re-emit."""
-        for s in (self.black_slider, self.white_slider):
-            s.blockSignals(True)
-            s.setValue(0)
-            s.blockSignals(False)
-        self.black_label.setText("Black: +0%")
-        self.white_label.setText("White: +0%")
+    def set_values(self, lo: float, hi: float) -> None:
+        """Mirror the current levels into the boxes (from auto or histogram drag),
+        without re-emitting."""
+        for spin, v in ((self.black_spin, lo), (self.white_spin, hi)):
+            spin.blockSignals(True)
+            spin.setValue(int(round(max(0, min(self._MAX, v)))))
+            spin.blockSignals(False)
 
 
 class StatusLog(QtWidgets.QFrame):
