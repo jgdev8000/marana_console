@@ -31,3 +31,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["marana_proto*", "marana_server*", "marana_client*"]
+
+[tool.setuptools.package-data]
+marana_server = ["assets/*.tif"]

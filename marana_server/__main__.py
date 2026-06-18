@@ -26,7 +26,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--frame-port", type=int,
                    default=int(os.environ.get("MARANA_FRAME_PORT", "5556")))
     p.add_argument("--captures-dir",
-                   default=os.environ.get("MARANA_CAPTURES_DIR", "/var/lib/marana/captures"))
+                   default=os.environ.get("MARANA_CAPTURES_DIR", "/data/marana_captures"))
     p.add_argument("--allow-shutdown", action="store_true",
                    help="enable the shutdown command (otherwise it's denied)")
     p.add_argument("--log-level", default="INFO")
@@ -45,7 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     # SIGABRT), so even a hard kill leaves a post-mortem in the journal.
     faulthandler.enable()
 
-    cam = MaranaCamera()
+    if args.sim:
+        from marana_server.sim_camera import SimCamera
+        cam = SimCamera()
+    else:
+        cam = MaranaCamera()
     cam.open(sim=args.sim)
     log.info("Opened %s (sim=%s) model=%r serial=%r sensor=%dx%d",
              "simulator" if args.sim else "real camera", args.sim,
