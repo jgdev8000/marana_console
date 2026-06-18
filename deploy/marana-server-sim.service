@@ -1,0 +1,27 @@
+[Unit]
+Description=Andor Marana camera server — SIMULATOR (test mode)
+After=network-online.target
+Wants=network-online.target
+# Sim and real bind the same ports / one camera — never run both at once.
+Conflicts=marana-server.service
+
+[Service]
+Type=notify
+WatchdogSec=90
+User=cxrodev
+Group=cxrodev
+WorkingDirectory=/home/cxrodev/marana_console
+Environment="EPICS_CA_AUTO_ADDR_LIST=YES"
+ExecStart=/home/cxrodev/marana_console/.venv/bin/python -m marana_server \
+  --sim \
+  --bind 192.168.1.7 \
+  --ctrl-port 5555 \
+  --frame-port 5556 \
+  --captures-dir /data/marana_captures \
+  --allow-shutdown \
+  --log-level INFO
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -24,7 +24,7 @@ ExecStart=/opt/marana/venv/bin/python -m marana_server \
   --bind 0.0.0.0 \
   --ctrl-port 5555 \
   --frame-port 5556 \
-  --captures-dir /var/lib/marana/captures \
+  --captures-dir /data/marana_captures \
   --log-level INFO
 Restart=on-failure
 RestartSec=2
