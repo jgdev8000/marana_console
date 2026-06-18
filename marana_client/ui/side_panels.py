@@ -89,9 +89,8 @@ class DisplayPanel(QtWidgets.QFrame):
 
 class ContrastPanel(QtWidgets.QFrame):
     """Contrast = black/white display levels in absolute pixel values (0..65535),
-    the single source of truth shared with the image's histogram. Typing a value
-    or dragging the histogram updates the other; 'Auto' computes a best-fit +
-    Solis-like window."""
+    the single source of truth shared with the image. Each level has a slider and
+    a value box (kept in sync); 'Auto' computes a best-fit + Solis-like window."""
     requestSetLevels = QtCore.pyqtSignal(float, float)   # black, white pixel values
     requestAuto = QtCore.pyqtSignal()
 
@@ -105,10 +104,8 @@ class ContrastPanel(QtWidgets.QFrame):
         t = QtWidgets.QLabel("CONTRAST"); t.setObjectName("cardTitle")
         lay.addWidget(t)
 
-        self.black_spin = self._make_row(lay, "Black", 0)
-        self.white_spin = self._make_row(lay, "White", self._MAX)
-        self.black_spin.valueChanged.connect(self._on_change)
-        self.white_spin.valueChanged.connect(self._on_change)
+        self.black_slider, self.black_spin = self._make_row(lay, "Black", 0)
+        self.white_slider, self.white_spin = self._make_row(lay, "White", self._MAX)
 
         auto_btn = QtWidgets.QPushButton("Auto")
         auto_btn.setToolTip("Best-fit + Solis-like window from the current frame")
@@ -116,26 +113,41 @@ class ContrastPanel(QtWidgets.QFrame):
         lay.addWidget(auto_btn)
 
     def _make_row(self, parent_lay, name: str, default: int):
+        parent_lay.addWidget(QtWidgets.QLabel(f"{name}:"))
         row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel(f"{name}:"))
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setRange(0, self._MAX)
+        slider.setValue(default)
         spin = QtWidgets.QSpinBox()
         spin.setRange(0, self._MAX)
         spin.setSingleStep(50)
         spin.setValue(default)
-        row.addWidget(spin, stretch=1)
-        parent_lay.addLayout(row)
-        return spin
 
-    def _on_change(self, _v: int) -> None:
+        def on_slider(v):
+            spin.blockSignals(True); spin.setValue(v); spin.blockSignals(False)
+            self._on_change()
+
+        def on_spin(v):
+            slider.blockSignals(True); slider.setValue(v); slider.blockSignals(False)
+            self._on_change()
+
+        slider.valueChanged.connect(on_slider)
+        spin.valueChanged.connect(on_spin)
+        row.addWidget(slider, stretch=1)
+        row.addWidget(spin)
+        parent_lay.addLayout(row)
+        return slider, spin
+
+    def _on_change(self) -> None:
         self.requestSetLevels.emit(float(self.black_spin.value()), float(self.white_spin.value()))
 
     def set_values(self, lo: float, hi: float) -> None:
-        """Mirror the current levels into the boxes (from auto or histogram drag),
-        without re-emitting."""
-        for spin, v in ((self.black_spin, lo), (self.white_spin, hi)):
-            spin.blockSignals(True)
-            spin.setValue(int(round(max(0, min(self._MAX, v)))))
-            spin.blockSignals(False)
+        """Mirror the current levels into both slider and box (from auto), no re-emit."""
+        for slider, spin, v in ((self.black_slider, self.black_spin, lo),
+                                (self.white_slider, self.white_spin, hi)):
+            iv = int(round(max(0, min(self._MAX, v))))
+            for w in (slider, spin):
+                w.blockSignals(True); w.setValue(iv); w.blockSignals(False)
 
 
 class StatusLog(QtWidgets.QFrame):

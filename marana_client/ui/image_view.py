@@ -53,6 +53,10 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
         self.image_item.ui.histogram.hide()   # contrast lives on the side panel boxes + Auto
+        self.image_item.getView().setBackgroundColor("k")
+        # Black backdrop for the whole image area (fills the empty grid corner too).
+        self.setObjectName("imageArea")
+        self.setStyleSheet("QWidget#imageArea { background-color: #000; }")
 
         # Solis-style layout: vertical line profile (left), image (centre),
         # horizontal line profile (bottom), pixel readout strip (very bottom).
@@ -79,10 +83,11 @@ class MaranaImageView(QtWidgets.QWidget):
         self._hi: float | None = None
 
     def _build_profiles(self) -> None:
-        """Line-profile panes: intensity vs pixel position for the cursor's row
-        (horizontal, bottom) and column (vertical, left). Orange trace, black
-        background, white axes — Andor Solis style."""
-        orange = pg.mkPen("#ff8c00", width=1)
+        """Compact line-profile panes: intensity vs pixel position for the cursor's
+        row (horizontal, bottom) and column (vertical, left). Soft blue trace on
+        black with dim axes — Andor Solis style, kept low-profile."""
+        trace = pg.mkPen("#60a5fa", width=1)        # eye-friendly blue
+        axis = pg.mkPen("#3b4a63")                  # dim axes, not pronounced
 
         def _style(pw):
             pw.setBackground("k")
@@ -91,24 +96,22 @@ class MaranaImageView(QtWidgets.QWidget):
             pw.setMenuEnabled(False)
             for ax in ("left", "bottom"):
                 a = pw.getAxis(ax)
-                a.setPen("w")
-                a.setTextPen("w")
+                a.setPen(axis)
+                a.setTextPen("#64748b")
 
         self.horiz_profile = pg.PlotWidget()
-        self.horiz_profile.setFixedHeight(130)
+        self.horiz_profile.setFixedHeight(80)
         _style(self.horiz_profile)
-        self.horiz_profile.setLabel("bottom", "x (px)")
-        self.horiz_curve = self.horiz_profile.plot([], [], pen=orange)
-        self.horiz_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("#64748b", width=1))
+        self.horiz_curve = self.horiz_profile.plot([], [], pen=trace)
+        self.horiz_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("#475569", width=1))
         self.horiz_profile.addItem(self.horiz_cursor)
 
         self.vert_profile = pg.PlotWidget()
-        self.vert_profile.setFixedWidth(130)
+        self.vert_profile.setFixedWidth(80)
         _style(self.vert_profile)
-        self.vert_profile.setLabel("left", "y (px)")
         self.vert_profile.getPlotItem().invertY(True)   # row 0 at top, like the image
-        self.vert_curve = self.vert_profile.plot([], [], pen=orange)   # x=intensity, y=row
-        self.vert_cursor = pg.InfiniteLine(angle=0, pen=pg.mkPen("#64748b", width=1))
+        self.vert_curve = self.vert_profile.plot([], [], pen=trace)   # x=intensity, y=row
+        self.vert_cursor = pg.InfiniteLine(angle=0, pen=pg.mkPen("#475569", width=1))
         self.vert_profile.addItem(self.vert_cursor)
 
     # --- display transforms ----------------------------------------------
