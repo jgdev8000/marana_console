@@ -74,6 +74,9 @@ class MaranaImageView(QtWidgets.QWidget):
         grid.addWidget(self.vert_profile, 0, 0)
         grid.addWidget(self.image_item, 0, 1)
         grid.addWidget(self.horiz_profile, 1, 1)
+        corner = QtWidgets.QWidget()   # explicit black filler so the empty cell isn't blue
+        corner.setStyleSheet("background-color: #000;")
+        grid.addWidget(corner, 1, 0)
         grid.addWidget(self.pixel_label, 2, 0, 1, 2)
         grid.setColumnStretch(1, 1)
         grid.setRowStretch(0, 1)
