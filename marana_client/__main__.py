@@ -114,6 +114,7 @@ def main(argv=None) -> int:
         w_ = client.request("get_feature", {"name": "AOIWidth"})["value"]
         h_ = client.request("get_feature", {"name": "AOIHeight"})["value"]
         cur_aoi["x0"], cur_aoi["y0"] = x0, y0
+        image_view.set_aoi_origin(x0, y0)   # keep the sweet-spot marker aligned
         live.set_aoi_values(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
         kinetic.set_aoi_for_estimate(x0, x0 + w_ - 1, y0, y0 + h_ - 1)
         focus.set_aoi(x0, x0 + w_ - 1, y0, y0 + h_ - 1)

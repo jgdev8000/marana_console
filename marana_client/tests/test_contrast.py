@@ -123,3 +123,33 @@ def test_sweetspot_places_crosshair_on_click(app):
     assert iv._sweetspot_mode is False           # disarmed after placing
     xs, ys = iv._sweetspot_marker.getData()
     assert xs[0] == pytest.approx(4.0) and ys[0] == pytest.approx(6.0)
+
+
+def test_sweetspot_follows_aoi(app):
+    from PyQt6 import QtCore
+    iv = MaranaImageView()
+    iv.set_aoi_origin(0, 0)
+    iv.update_frame(np.zeros((100, 100), dtype=np.uint16))
+    iv.set_sweetspot_mode()
+
+    class _Ev:
+        def __init__(self, sp): self._sp = sp
+        def button(self): return QtCore.Qt.MouseButton.LeftButton
+        def scenePos(self): return self._sp
+        def accept(self): pass
+
+    iv._on_mouse_clicked(_Ev(iv._vb.mapViewToScene(QtCore.QPointF(30.0, 40.0))))
+    assert iv._sweetspot_abs == (30, 40)
+    # AOI crops to origin (20,20): marker still inside -> shown at local (10,20)
+    iv.set_aoi_origin(20, 20)
+    iv.update_frame(np.zeros((50, 50), dtype=np.uint16))
+    xs, ys = iv._sweetspot_marker.getData()
+    assert len(xs) == 1 and xs[0] == pytest.approx(10.5) and ys[0] == pytest.approx(20.5)
+    # AOI excludes the spot -> hidden
+    iv.set_aoi_origin(60, 60)
+    iv.update_frame(np.zeros((40, 40), dtype=np.uint16))
+    assert len(iv._sweetspot_marker.getData()[0]) == 0
+    # Back to full frame -> reappears
+    iv.set_aoi_origin(0, 0)
+    iv.update_frame(np.zeros((100, 100), dtype=np.uint16))
+    assert iv._sweetspot_marker.getData()[0][0] == pytest.approx(30.5)

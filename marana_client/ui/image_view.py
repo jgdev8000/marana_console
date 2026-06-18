@@ -100,8 +100,12 @@ class MaranaImageView(QtWidgets.QWidget):
         self._lo: float | None = None
         self._hi: float | None = None
         # Sweet-spot crosshair marker: a thin '+' symbol (two lines, no circle).
+        # Tracked in absolute sensor coords so it survives AOI changes.
         self._sweetspot_mode = False
         self._sweetspot_marker = None
+        self._sweetspot_abs = None          # (x, y) in absolute sensor pixels
+        self._aoi_x0 = 0                     # current AOI origin (0-based sensor px)
+        self._aoi_y0 = 0
         self._cross_symbol = QtGui.QPainterPath()
         self._cross_symbol.moveTo(-0.5, 0.0); self._cross_symbol.lineTo(0.5, 0.0)
         self._cross_symbol.moveTo(0.0, -0.5); self._cross_symbol.lineTo(0.0, 0.5)
@@ -115,19 +119,60 @@ class MaranaImageView(QtWidgets.QWidget):
         if not self._sweetspot_mode or ev.button() != QtCore.Qt.MouseButton.LeftButton:
             return
         p = self._vb.mapSceneToView(ev.scenePos())
+        rc = self._raw_coords_at(int(round(p.y())), int(round(p.x())))
+        if rc is None:
+            return   # clicked outside the image
+        rr, cc = rc
+        self._sweetspot_abs = (self._aoi_x0 + cc, self._aoi_y0 + rr)
+        self._place_sweetspot(p.x(), p.y())
+        self._sweetspot_mode = False
+        self.image_item.getView().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        ev.accept()
+
+    def _place_sweetspot(self, dx: float, dy: float) -> None:
         if self._sweetspot_marker is None:
             # Thin white crosshair, no circle; cosmetic pen keeps it 1px at any size.
             pen = pg.mkPen("#ffffff")
             pen.setCosmetic(True)
             self._sweetspot_marker = pg.ScatterPlotItem(
-                [p.x()], [p.y()], symbol=self._cross_symbol, size=18,
+                [dx], [dy], symbol=self._cross_symbol, size=18,
                 pen=pen, brush=None, pxMode=True)
             self._vb.addItem(self._sweetspot_marker)
         else:
-            self._sweetspot_marker.setData([p.x()], [p.y()])
-        self._sweetspot_mode = False
-        self.image_item.getView().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        ev.accept()
+            self._sweetspot_marker.setData([dx], [dy])
+
+    def set_aoi_origin(self, x0: int, y0: int) -> None:
+        """Tell the view the current AOI's sensor origin so the sweet spot can
+        be kept aligned when the AOI changes."""
+        self._aoi_x0, self._aoi_y0 = int(x0), int(y0)
+        self._reposition_sweetspot()
+
+    def _reposition_sweetspot(self) -> None:
+        """Re-place (or hide) the marker for the current AOI from its absolute pos."""
+        if self._sweetspot_marker is None or self._sweetspot_abs is None or self._last_raw is None:
+            return
+        ax, ay = self._sweetspot_abs
+        cc, rr = ax - self._aoi_x0, ay - self._aoi_y0
+        H, W = self._last_raw.shape
+        if 0 <= cc < W and 0 <= rr < H:
+            dr, dc = self._fwd_point(rr, cc, H, W)
+            self._sweetspot_marker.setData([dc + 0.5], [dr + 0.5])
+        else:
+            self._sweetspot_marker.setData([], [])   # outside AOI -> hidden (kept for later)
+
+    def _fwd_point(self, rr: int, cc: int, H: int, W: int):
+        """Raw (row, col) -> displayed (row, col), applying flip then rotation
+        (inverse of _inv_point)."""
+        r = (H - 1 - rr) if self.state.flip_v else rr
+        c = (W - 1 - cc) if self.state.flip_h else cc
+        k = (self.state.rot // 90) % 4
+        if k == 0:
+            return (r, c)
+        if k == 1:
+            return (W - 1 - c, r)
+        if k == 2:
+            return (H - 1 - r, W - 1 - c)
+        return (c, H - 1 - r)
 
     def _build_profiles(self) -> None:
         """Compact line-profile panes: intensity vs pixel position for the cursor's
@@ -238,6 +283,7 @@ class MaranaImageView(QtWidgets.QWidget):
             # Re-assert current levels (setImage can reset them) without recomputing.
             self.image_item.setLevels(self._lo, self._hi)
             self._set_profile_ranges()
+        self._reposition_sweetspot()
 
     def _on_mouse_moved(self, scene_pos) -> None:
         """Update the pixel readout and the row/column line profiles for the cursor."""
