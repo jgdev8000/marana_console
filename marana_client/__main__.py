@@ -75,7 +75,7 @@ def main(argv=None) -> int:
     server_info: dict = {}
     latest_live_header: dict = {}
     latest_live_frame: np.ndarray | None = None
-    pending_live_auto = {"v": False}   # auto-stretch once on the first frame after live starts
+    live_auto = {"on": False}   # when True, every live frame auto-stretches (until live restarts)
     quick_acq = {"active": False, "restore": None}   # ACQUIRE & SAVE quick-acquisition context
 
     # --- Hello + populate features ---
@@ -157,11 +157,12 @@ def main(argv=None) -> int:
 
     live.requestSetFeature.connect(_on_set_feature)
     def _start_live():
-        pending_live_auto["v"] = True   # auto-stretch on the first live frame
+        live_auto["on"] = False   # auto is off on (re)start; user presses Auto to enable per-frame
         safe_req("start_live", {})
         win.set_live_indicator(True)
     live.requestStartLive.connect(_start_live)
-    live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False), live.set_live_active(False)))
+    live.requestStop.connect(lambda: (safe_req("stop", {}), win.set_live_indicator(False),
+                                      live.set_live_active(False), live_auto.update(on=False)))
     def _apply_aoi(x0, x1, y0, y1):
         """Set the camera AOI (0-based inclusive). AOI is a cold setting and the
         camera isn't thread-safe, so stop live first, apply, then resume — or, if
@@ -263,8 +264,7 @@ def main(argv=None) -> int:
         # Stash as the currently-displayed frame so SAVE / SNAP & SAVE write this one.
         latest_live_frame = arr
         latest_live_header = r["header"]
-        image_view.update_frame(arr)
-        image_view.auto_baseline()   # auto-stretch on every snap (offsets persist)
+        image_view.update_frame(arr)   # snap holds current levels; user presses Auto to stretch
         status_log.append("snapped frame (display only)", "info")
 
     def _save_displayed():
@@ -457,7 +457,8 @@ def main(argv=None) -> int:
     disp.requestRotation.connect(image_view.set_rotation)
     disp.requestFlip.connect(image_view.set_flip)
     contrast.requestOffsets.connect(image_view.set_level_offsets)
-    contrast.requestAuto.connect(lambda: (image_view.reset_auto(), contrast.center()))
+    contrast.requestAuto.connect(lambda: (image_view.reset_auto(), contrast.center(),
+                                          live_auto.update(on=True)))
 
     # Worker -> GUI updates
     def _on_frame(topic: bytes, header: dict, arr: np.ndarray) -> None:
@@ -466,10 +467,9 @@ def main(argv=None) -> int:
         if topic == m.TOPIC_LIVE_FRAME:
             latest_live_frame = arr
             latest_live_header = header
-            image_view.update_frame(arr)
-            if pending_live_auto["v"]:
-                image_view.auto_baseline()   # auto-stretch once at start of live
-                pending_live_auto["v"] = False
+            # Per-frame auto only while live_auto is on (user pressed Auto since
+            # this live session started); otherwise hold the current levels.
+            image_view.update_frame(arr, auto=live_auto["on"])
         elif topic == m.TOPIC_KINETIC_FRAME:
             image_view.update_frame(arr)
         elif topic == m.TOPIC_FOCUS_PROGRESS:

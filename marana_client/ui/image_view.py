@@ -127,13 +127,16 @@ class MaranaImageView(QtWidgets.QWidget):
         if self._last_raw is not None:
             self.update_frame(self._last_raw)
 
-    def update_frame(self, frame: np.ndarray) -> None:
+    def update_frame(self, frame: np.ndarray, auto: bool = False) -> None:
         if frame is None or frame.size == 0:
             return
         self._last_raw = frame
-        # Best-fit auto re-scales on every frame (live tracks the data, like
-        # Solis). User black/white offsets still ride on top via _effective_levels.
-        self._set_baseline_from(frame)
+        # Auto is opt-in: the caller passes auto=True per live frame only after
+        # the user presses Auto. Snaps (and live before Auto) hold the current
+        # levels. The very first frame ever still gets a one-time baseline so
+        # the view isn't blank.
+        if auto or self._auto_lo is None:
+            self._set_baseline_from(frame)
         view = self._apply_transform(frame)
         levels = self._effective_levels()
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)

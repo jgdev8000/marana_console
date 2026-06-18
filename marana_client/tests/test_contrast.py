@@ -41,16 +41,25 @@ def test_auto_applies_solis_bias(app):
     assert hi == pytest.approx(1000 + 0.32 * 1000)   # 1320
 
 
-def test_rescales_every_frame(app):
+def test_levels_frozen_without_auto(app):
+    """After the first frame establishes levels, later frames do NOT rescale
+    unless auto=True (snap/live-without-auto hold the contrast)."""
     iv = MaranaImageView()
-    iv.update_frame(np.full((8, 8), 500, dtype=np.uint16) + np.arange(64, dtype=np.uint16).reshape(8, 8))
-    first = _levels(iv)
-    frame2 = np.full((8, 8), 1000, dtype=np.uint16)
-    frame2[0, 0] = 0
-    frame2[7, 7] = 1000          # span 1000
-    iv.update_frame(frame2)
-    assert _levels(iv) == pytest.approx((110.0, 1320.0))
-    assert _levels(iv) != first
+    iv.update_frame(np.full((8, 8), 200, dtype=np.uint16))   # first frame -> lazy init
+    held = _levels(iv)
+    frame2 = np.zeros((8, 8), dtype=np.uint16)
+    frame2[7, 7] = 50000          # very different data
+    iv.update_frame(frame2)        # auto defaults False
+    assert _levels(iv) == held     # unchanged
+
+
+def test_auto_true_rescales(app):
+    iv = MaranaImageView()
+    iv.update_frame(np.full((8, 8), 200, dtype=np.uint16))
+    frame2 = np.zeros((8, 8), dtype=np.uint16)
+    frame2[7, 7] = 1000           # span 1000
+    iv.update_frame(frame2, auto=True)
+    assert _levels(iv) == pytest.approx((110.0, 1320.0))   # best-fit + bias of frame2
 
 
 def test_histogram_axis_pinned_to_full_16bit(app):
