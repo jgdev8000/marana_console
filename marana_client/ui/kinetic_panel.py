@@ -22,7 +22,6 @@ class KineticPanel(QtWidgets.QWidget):
     requestStartKinetic = QtCore.pyqtSignal(int, float, float)
     requestConfirmKinetic = QtCore.pyqtSignal()
     requestCancelKinetic = QtCore.pyqtSignal()
-    requestSaveStack = QtCore.pyqtSignal()
     requestSaveFrame = QtCore.pyqtSignal(int)
 
     def __init__(self, parent=None):
@@ -80,12 +79,12 @@ class KineticPanel(QtWidgets.QWidget):
         prog.layout().addWidget(self.progress_label)
         outer.addWidget(prog)
 
-        # Save
+        # Save (the stack auto-saves on completion; this shows where)
         save = self._card("SAVE")
-        self.save_stack_btn = QtWidgets.QPushButton("SAVE STACK…")
-        self.save_stack_btn.setEnabled(False)
-        self.save_stack_btn.clicked.connect(self.requestSaveStack.emit)
-        save.layout().addWidget(self.save_stack_btn)
+        self.saved_label = QtWidgets.QLabel("—")
+        self.saved_label.setWordWrap(True)
+        self.saved_label.setStyleSheet("color: #94a3b8;")
+        save.layout().addWidget(self.saved_label)
         self.save_frame_btn = QtWidgets.QPushButton("SAVE FRAME…")
         self.save_frame_btn.setEnabled(False)
         self.save_frame_btn.clicked.connect(lambda: self.requestSaveFrame.emit(self.scrubber.value()))
@@ -165,7 +164,6 @@ class KineticPanel(QtWidgets.QWidget):
     def on_complete(self, done: int, total: int, partial: bool) -> None:
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.save_stack_btn.setEnabled(done > 0)
         self.save_frame_btn.setEnabled(done > 0)
         msg = "Cancelled" if partial else "Complete"
         self.progress_label.setText(f"{msg}: {done} frames captured")
@@ -173,6 +171,10 @@ class KineticPanel(QtWidgets.QWidget):
             self.scrubber.setMaximum(done - 1)
             self.scrubber.setValue(0)
             self._update_scrubber_label(0)
+
+    def show_saved(self, path: str) -> None:
+        """Display where the stack was auto-saved (called after the server save)."""
+        self.saved_label.setText(f"Stack saved to {path}")
 
     def _update_scrubber_label(self, v: int) -> None:
         self.scrubber_label.setText(f"Frame {v} / {self.scrubber.maximum()}")

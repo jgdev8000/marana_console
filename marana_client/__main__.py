@@ -17,7 +17,6 @@ from marana_client.worker import ClientWorker
 from marana_client.ui.connection_card import ConnectionCard
 from marana_client.ui.image_view import MaranaImageView
 from marana_client.ui.kinetic_panel import KineticPanel
-from marana_client.ui.kinetic_save_dialog import KineticSaveDialog
 from marana_client.ui.live_panel import LivePanel
 from marana_client.ui.focus_panel import FocusPanel
 from marana_client.ui.main_window import MainWindow
@@ -266,18 +265,15 @@ def main(argv=None) -> int:
     kinetic.requestConfirmKinetic.connect(lambda: (safe_req("confirm_kinetic", {}), win.set_scrubber_available(False)))
     kinetic.requestCancelKinetic.connect(lambda: safe_req("cancel_kinetic", {}))
 
-    def _save_stack():
-        dialog = KineticSaveDialog(
-            list_dir_callable=lambda sub: client.request("list_kinetic_save_dir", {"subdir": sub}),
-            default_subdir=cfg.get("kinetic_subdir", ""),
-            parent=win,
-        )
-        if dialog.exec():
-            rel = dialog.chosen_relative_path()
-            r = safe_req("save_kinetic_stack", {"path": rel}, timeout_ms=120_000)
-            if r is not None:
-                status_log.append(f"saved stack: {r['path']} ({r['bytes_written']} bytes)", "info")
-                cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
+    def _auto_save_kinetic(done: int, partial: bool):
+        # Auto-save every completed burst; server picks kinetic/<YYMMDD>_N.tif.
+        if done <= 0:
+            return
+        r = safe_req("save_kinetic_stack", {}, timeout_ms=120_000)
+        if r is not None:
+            tag = " (partial)" if partial else ""
+            kinetic.show_saved(r["path"])
+            status_log.append(f"Auto-saved kinetic stack{tag}: {r['path']} ({r['bytes_written']} bytes)", "info")
 
     def _save_frame(index: int):
         r = safe_req("get_kinetic_frame", {"index": index}, timeout_ms=30_000)
@@ -295,7 +291,6 @@ def main(argv=None) -> int:
         except Exception as e:
             status_log.append(f"save failed: {e}", "error")
 
-    kinetic.requestSaveStack.connect(_save_stack)
     kinetic.requestSaveFrame.connect(_save_frame)
     kinetic.scrubber.valueChanged.connect(lambda v: _scrub_to(v))
 
@@ -329,20 +324,6 @@ def main(argv=None) -> int:
         cfg["mover_source"] = src
         cfg_mod.save(cfg)
 
-    def _save_focus_stack():
-        dialog = KineticSaveDialog(
-            list_dir_callable=lambda sub: client.request("list_kinetic_save_dir", {"subdir": sub}),
-            default_subdir=cfg.get("kinetic_subdir", ""),
-            default_name="marana_focus.tif",
-            parent=win,
-        )
-        if dialog.exec():
-            rel = dialog.chosen_relative_path()
-            r = safe_req("save_focus_stack", {"path": rel}, timeout_ms=120_000)
-            if r is not None:
-                status_log.append(f"saved focus stack: {r['path']} ({r['bytes_written']} bytes)", "info")
-                cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
-
     def _auto_save_focus_stack(done: int, partial: bool):
         # Auto-save every completed series; server picks focus/<YYMMDD>_N.tif.
         if done <= 0:
@@ -350,13 +331,13 @@ def main(argv=None) -> int:
         r = safe_req("save_focus_stack", {}, timeout_ms=120_000)
         if r is not None:
             tag = " (partial)" if partial else ""
+            focus.show_saved(r["path"])
             status_log.append(
                 f"Auto-saved focus stack{tag}: {r['path']} ({r['bytes_written']} bytes)", "info")
 
     focus.requestStartFocus.connect(_start_focus)
     focus.requestConfirmFocus.connect(lambda: safe_req("confirm_focus", {}))
     focus.requestCancelFocus.connect(lambda: safe_req("cancel_focus", {}))
-    focus.requestSaveFocusStack.connect(_save_focus_stack)
     focus.requestRefreshStartZ.connect(_refresh_start_z)
     focus.requestSetMoverSource.connect(_persist_mover_source)
 
@@ -398,9 +379,12 @@ def main(argv=None) -> int:
         elif topic == m.TOPIC_KINETIC_PROGRESS:
             kinetic.on_progress(header["frames_done"], header["frames_total"], header["achieved_fps"])
         elif topic == m.TOPIC_KINETIC_COMPLETE:
-            kinetic.on_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
-            win.set_scrubber_available(header["frames_done"] > 0)
+            done = header["frames_done"]
+            partial = header.get("partial", False)
+            kinetic.on_complete(done, header["frames_total"], partial)
+            win.set_scrubber_available(done > 0)
             win.set_live_indicator(False)
+            _auto_save_kinetic(done, partial)
         elif topic == m.TOPIC_FOCUS_COMPLETE:
             done = header["frames_done"]
             partial = header.get("partial", False)

@@ -141,6 +141,23 @@ def test_save_focus_stack_auto_increments_sequence(service, tmp_path):
     assert (fdir / f"{today}_4.tif").exists()
 
 
+def test_save_kinetic_stack_auto_names_in_kinetic_subdir(service, tmp_path):
+    """No path arg -> server auto-names kinetic/<YYMMDD>_N.tif (own daily counter)."""
+    from datetime import datetime
+    svc, ctx = service
+    svc._captures_dir = tmp_path
+    today = datetime.now().strftime("%y%m%d")
+    kdir = tmp_path / "kinetic"
+    kdir.mkdir()
+    (kdir / f"{today}_1.tif").write_bytes(b"x")   # existing -> next is _2
+    svc._worker._kinetic_frames = np.zeros((4, 8, 8), dtype=np.uint16)
+    svc._worker._kinetic_status = {"achieved_fps": 10.0, "elapsed_s": 0.4}
+    reply = _req(ctx, "inproc://test_ctrl", "save_kinetic_stack", {})
+    assert reply["ok"] is True
+    assert reply["result"]["path"].endswith(f"kinetic/{today}_2.tif")
+    assert (kdir / f"{today}_2.tif").exists()
+
+
 def test_save_snapshot_auto_names_at_root(service, tmp_path):
     """save_snapshot with no path -> <captures>/<YYMMDD>_1.tif; metadata from camera state."""
     import json

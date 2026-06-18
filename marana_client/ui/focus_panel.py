@@ -12,7 +12,6 @@ class FocusPanel(QtWidgets.QWidget):
     requestStartFocus = QtCore.pyqtSignal(dict)
     requestConfirmFocus = QtCore.pyqtSignal()
     requestCancelFocus = QtCore.pyqtSignal()
-    requestSaveFocusStack = QtCore.pyqtSignal()
     requestRefreshStartZ = QtCore.pyqtSignal(str)        # mover_pv_base
     requestSetMoverSource = QtCore.pyqtSignal(str)       # "sim" | "real"
 
@@ -114,12 +113,12 @@ class FocusPanel(QtWidgets.QWidget):
         prog.layout().addWidget(self.progress_label)
         outer.addWidget(prog)
 
-        # Save
+        # Save (the series auto-saves on completion; this shows where)
         save = self._card("SAVE")
-        self.save_btn = QtWidgets.QPushButton("SAVE STACK…")
-        self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self.requestSaveFocusStack.emit)
-        save.layout().addWidget(self.save_btn)
+        self.saved_label = QtWidgets.QLabel("—")
+        self.saved_label.setWordWrap(True)
+        self.saved_label.setStyleSheet("color: #94a3b8;")
+        save.layout().addWidget(self.saved_label)
         outer.addWidget(save)
 
         outer.addStretch(1)
@@ -223,7 +222,7 @@ class FocusPanel(QtWidgets.QWidget):
         self.requestConfirmFocus.emit()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.save_btn.setEnabled(False)
+        self.saved_label.setText("—")
         self.progress_bar.setRange(0, plan["stop_count"])
         self.progress_bar.setValue(0)
         self.progress_label.setText("Acquiring…")
@@ -235,6 +234,9 @@ class FocusPanel(QtWidgets.QWidget):
     def on_focus_complete(self, done: int, total: int, partial: bool) -> None:
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.save_btn.setEnabled(done > 0)
         msg = "Cancelled" if partial else "Complete"
         self.progress_label.setText(f"{msg}: {done} frames captured")
+
+    def show_saved(self, path: str) -> None:
+        """Display where the series was auto-saved (called after the server save)."""
+        self.saved_label.setText(f"Series saved to {path}")

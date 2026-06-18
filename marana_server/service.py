@@ -150,43 +150,26 @@ class MaranaService(threading.Thread):
             "sim": self._sim,
         }
 
-    def _next_focus_path(self) -> str:
-        """Auto-name the next focus stack: focus/<YYMMDD>_N.tif.
+    def _next_dated_path(self, subdir: str = "") -> str:
+        """Auto-name <subdir>/<YYMMDD>_N.tif with a per-day, per-folder counter.
 
-        N is a per-day sequence counting focus stacks only (first of the day is
-        _1). Uses max(existing today)+1 so an existing file is never overwritten.
+        N = max(existing today in that folder) + 1, so a file is never
+        overwritten. subdir="" uses the captures root (snapshots); "focus" and
+        "kinetic" each keep their own independent daily sequence.
         """
         import re
         from datetime import datetime
-        focus_dir = self._captures_dir / "focus"
-        focus_dir.mkdir(parents=True, exist_ok=True)
+        d = self._captures_dir / subdir if subdir else self._captures_dir
+        d.mkdir(parents=True, exist_ok=True)
         date = datetime.now().strftime("%y%m%d")
         pat = re.compile(rf"^{date}_(\d+)\.tif$")
         n = 0
-        for child in focus_dir.iterdir():
-            mobj = pat.match(child.name)
-            if mobj:
-                n = max(n, int(mobj.group(1)))
-        return f"focus/{date}_{n + 1}.tif"
-
-    def _next_capture_path(self) -> str:
-        """Auto-name the next root capture: <YYMMDD>_N.tif.
-
-        N is a shared per-day counter over root-level captures (snapshots and
-        anything else written to the captures root). Subdirectories such as
-        focus/ are ignored. max(existing today)+1 never overwrites.
-        """
-        import re
-        from datetime import datetime
-        self._captures_dir.mkdir(parents=True, exist_ok=True)
-        date = datetime.now().strftime("%y%m%d")
-        pat = re.compile(rf"^{date}_(\d+)\.tif$")
-        n = 0
-        for child in self._captures_dir.iterdir():
-            mobj = pat.match(child.name)
-            if mobj:
-                n = max(n, int(mobj.group(1)))
-        return f"{date}_{n + 1}.tif"
+        for child in d.iterdir():
+            m = pat.match(child.name)
+            if m:
+                n = max(n, int(m.group(1)))
+        prefix = f"{subdir}/" if subdir else ""
+        return f"{prefix}{date}_{n + 1}.tif"
 
     def _resolve_under_captures(self, path: str) -> Path:
         p = (self._captures_dir / path).resolve()
@@ -200,7 +183,9 @@ class MaranaService(threading.Thread):
         if self._worker._kinetic_frames is None:
             raise ValueError("no kinetic frames buffered")
         frames = self._worker._kinetic_frames
-        target = self._resolve_under_captures(args["path"])
+        # No path -> auto-name kinetic/<YYMMDD>_N.tif; explicit path -> manual save.
+        rel_path = args.get("path") or self._next_dated_path("kinetic")
+        target = self._resolve_under_captures(rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         cooling = self._cam.get_cooling()
         aoi = self._cam.get_aoi()
@@ -245,7 +230,7 @@ class MaranaService(threading.Thread):
             raise ValueError("no focus frames buffered")
         frames = self._worker._focus_frames
         # No path -> auto-name focus/<YYMMDD>_N.tif; explicit path -> manual save.
-        rel_path = args.get("path") or self._next_focus_path()
+        rel_path = args.get("path") or self._next_dated_path("focus")
         target = self._resolve_under_captures(rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         cooling = self._cam.get_cooling()
@@ -282,7 +267,7 @@ class MaranaService(threading.Thread):
         h = int(args["height"])
         frame = np.frombuffer(args["frame_bytes"], dtype=np.uint16).reshape(h, w).copy()
         # No path -> auto-name <YYMMDD>_N.tif at root; explicit path -> manual save.
-        rel_path = args.get("path") or self._next_capture_path()
+        rel_path = args.get("path") or self._next_dated_path("")
         target = self._resolve_under_captures(rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         cooling = self._cam.get_cooling()
