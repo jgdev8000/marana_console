@@ -13,6 +13,7 @@ class LivePanel(QtWidgets.QWidget):
     requestSnapDisplay = QtCore.pyqtSignal()   # acquire one frame, display only (no save)
     requestSnapNow = QtCore.pyqtSignal()
     requestSaveDisplayed = QtCore.pyqtSignal()  # save the currently displayed frame
+    requestSetSweetspot = QtCore.pyqtSignal()   # arm crosshair placement in the image
     requestSetAoi = QtCore.pyqtSignal(int, int, int, int)
     requestSetAoiFull = QtCore.pyqtSignal()
 
@@ -107,6 +108,11 @@ class LivePanel(QtWidgets.QWidget):
         self.snap_button = QtWidgets.QPushButton("SNAP && SAVE")
         self.snap_button.clicked.connect(self.requestSnapNow.emit)
         cap_card.layout().addWidget(self.snap_button)
+        cap_card.layout().addSpacing(8)
+        self.sweetspot_button = QtWidgets.QPushButton("SET SWEETSPOT")
+        self.sweetspot_button.setToolTip("Click, then click in the image to place a crosshair marker")
+        self.sweetspot_button.clicked.connect(self.requestSetSweetspot.emit)
+        cap_card.layout().addWidget(self.sweetspot_button)
         outer.addWidget(cap_card)
 
         outer.addStretch(1)

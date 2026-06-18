@@ -250,6 +250,7 @@ def main(argv=None) -> int:
     live.requestSnapDisplay.connect(_snap_display)
     live.requestSnapNow.connect(_snap_now)
     live.requestSaveDisplayed.connect(_save_displayed)
+    live.requestSetSweetspot.connect(image_view.set_sweetspot_mode)
 
     # Kinetic flow — must call `stop` first so the server isn't already in LIVE
     # (the ICE server's contract; concurrent SDK threads cause AT_ERR_TIMEDOUT).

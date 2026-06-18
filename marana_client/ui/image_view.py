@@ -94,10 +94,34 @@ class MaranaImageView(QtWidgets.QWidget):
         self.state = DisplayState()
         self._install_aoi_drag()
         self._vb.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self._vb.scene().sigMouseClicked.connect(self._on_mouse_clicked)
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
         # Single source of truth: the actual black/white display levels (pixel values).
         self._lo: float | None = None
         self._hi: float | None = None
+        # Sweet-spot crosshair marker.
+        self._sweetspot_mode = False
+        self._sweetspot_marker = None
+
+    def set_sweetspot_mode(self) -> None:
+        """Arm placement: next left-click in the image drops/moves the crosshair."""
+        self._sweetspot_mode = True
+        self.image_item.getView().setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    def _on_mouse_clicked(self, ev) -> None:
+        if not self._sweetspot_mode or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        p = self._vb.mapSceneToView(ev.scenePos())
+        if self._sweetspot_marker is None:
+            self._sweetspot_marker = pg.TargetItem(
+                pos=(p.x(), p.y()), size=18, movable=True,
+                pen=pg.mkPen("#fde047", width=2))
+            self._vb.addItem(self._sweetspot_marker)
+        else:
+            self._sweetspot_marker.setPos(p)
+        self._sweetspot_mode = False
+        self.image_item.getView().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        ev.accept()
 
     def _build_profiles(self) -> None:
         """Compact line-profile panes: intensity vs pixel position for the cursor's
@@ -280,7 +304,7 @@ class MaranaImageView(QtWidgets.QWidget):
         vb.mouseDragEvent = self._on_vb_drag
 
     def _on_vb_drag(self, ev, axis=None) -> None:
-        if ev.button() != QtCore.Qt.MouseButton.LeftButton:
+        if self._sweetspot_mode or ev.button() != QtCore.Qt.MouseButton.LeftButton:
             ev.ignore()
             return
         ev.accept()

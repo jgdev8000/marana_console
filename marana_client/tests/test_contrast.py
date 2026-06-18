@@ -101,3 +101,25 @@ def test_pixel_readout_inverts_flip(app):
     iv.set_flip(h=True, v=False)   # horizontal flip
     # displayed col 0 maps to raw col W-1=29 at row 5 -> value 5*30+29=179
     assert iv._pixel_text_at(5, 0) == "x=29  y=5  value=179"
+
+
+def test_sweetspot_places_crosshair_on_click(app):
+    from PyQt6 import QtCore
+    iv = MaranaImageView()
+    iv.update_frame(np.zeros((10, 10), dtype=np.uint16))
+    assert iv._sweetspot_marker is None
+    iv.set_sweetspot_mode()
+    assert iv._sweetspot_mode is True
+
+    class _Ev:
+        def __init__(self, sp): self._sp = sp
+        def button(self): return QtCore.Qt.MouseButton.LeftButton
+        def scenePos(self): return self._sp
+        def accept(self): pass
+
+    sp = iv._vb.mapViewToScene(QtCore.QPointF(4.0, 6.0))
+    iv._on_mouse_clicked(_Ev(sp))
+    assert iv._sweetspot_marker is not None      # placed and persists
+    assert iv._sweetspot_mode is False           # disarmed after placing
+    assert iv._sweetspot_marker.pos().x() == pytest.approx(4.0)
+    assert iv._sweetspot_marker.pos().y() == pytest.approx(6.0)
