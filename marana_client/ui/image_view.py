@@ -62,6 +62,7 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.menuBtn.hide()
         self.image_item.ui.histogram.hide()   # contrast lives on the side panel boxes + Auto
         self.image_item.getView().setBackgroundColor("k")
+        self.image_item.ui.graphicsView.setBackground("k")   # letterbox area behind the image
 
         # Solis-style layout: vertical line profile (left), image (centre),
         # horizontal line profile (bottom), pixel readout strip (very bottom).
