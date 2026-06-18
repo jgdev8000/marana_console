@@ -75,7 +75,9 @@ def main(argv=None) -> int:
     server_info: dict = {}
     latest_live_header: dict = {}
     latest_live_frame: np.ndarray | None = None
-    live_auto = {"on": False}   # when True, every live frame auto-stretches (until live restarts)
+    live_auto = {"on": False}   # auto-display mode: when True, every shown frame (live/kinetic/
+                                # focus/scrub) auto-stretches. Auto turns it on; manual edit or
+                                # live restart turns it off.
     quick_acq = {"active": False, "restore": None}   # ACQUIRE & SAVE quick-acquisition context
 
     # --- Hello + populate features ---
@@ -395,7 +397,7 @@ def main(argv=None) -> int:
         r = safe_req("get_kinetic_frame", {"index": idx}, timeout_ms=10_000)
         if r is None: return
         arr = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(r["header"]["height"], r["header"]["width"])
-        image_view.update_frame(arr)
+        image_view.update_frame(arr, auto=live_auto["on"])
 
     # --- Focus flow ---
     def _start_focus(params: dict):
@@ -474,9 +476,9 @@ def main(argv=None) -> int:
             # this live session started); otherwise hold the current levels.
             image_view.update_frame(arr, auto=live_auto["on"])
         elif topic == m.TOPIC_KINETIC_FRAME:
-            image_view.update_frame(arr)
+            image_view.update_frame(arr, auto=live_auto["on"])
         elif topic == m.TOPIC_FOCUS_PROGRESS:
-            image_view.update_frame(arr)
+            image_view.update_frame(arr, auto=live_auto["on"])
             focus.on_focus_progress(header["frame_idx"], header["frames_total"], header["z_um"])
 
     def _on_status(topic: bytes, header: dict) -> None:
