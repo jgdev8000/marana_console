@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 # Auto-contrast bias applied on top of the best-fit (min..max) window, as a
 # percentage of the data span, to approximate Andor Solis's auto. Tune here.
@@ -46,13 +46,11 @@ class MaranaImageView(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Black backdrop for the whole central area, incl. gaps and the empty grid
-        # corner (palette + autoFillBackground works for a plain QWidget subclass,
-        # which ignores a stylesheet background by default).
-        pal = self.palette()
-        pal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#000000"))
-        self.setPalette(pal)
-        self.setAutoFillBackground(True)
+        # Black backdrop for the whole central area, incl. the empty grid corner.
+        # The app stylesheet sets `QWidget { background:#0a1424 }`; an #id selector
+        # is more specific, so this wins for this widget (palette would not).
+        self.setObjectName("imageArea")
+        self.setStyleSheet("QWidget#imageArea { background-color: #000; }")
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -68,7 +66,8 @@ class MaranaImageView(QtWidgets.QWidget):
         # horizontal line profile (bottom), pixel readout strip (very bottom).
         self._build_profiles()
         self.pixel_label = QtWidgets.QLabel("")
-        self.pixel_label.setStyleSheet("color: #94a3b8; font-family: monospace; padding: 2px 6px;")
+        self.pixel_label.setStyleSheet(
+            "color: #94a3b8; background-color: #000; font-family: monospace; padding: 2px 6px;")
         grid = QtWidgets.QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(0)
