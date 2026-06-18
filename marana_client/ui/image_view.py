@@ -52,15 +52,24 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item = pg.ImageView()
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
-        self.image_item.ui.histogram.hide()   # replaced by the horizontal histogram below
-        layout.addWidget(self.image_item, stretch=1)
-        # Pixel readout strip under the image: x, y, and value under the cursor.
+        self.image_item.ui.histogram.hide()   # contrast lives on the side panel boxes + Auto
+
+        # Solis-style layout: vertical line profile (left), image (centre),
+        # horizontal line profile (bottom), pixel readout strip (very bottom).
+        self._build_profiles()
         self.pixel_label = QtWidgets.QLabel("")
         self.pixel_label.setStyleSheet("color: #94a3b8; font-family: monospace; padding: 2px 6px;")
-        layout.addWidget(self.pixel_label)
-        # Horizontal histogram: pixel value (0..65535) on X, log count on Y, with
-        # draggable black/white lines that drive the display levels.
-        self._build_histogram(layout)
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        grid.addWidget(self.vert_profile, 0, 0)
+        grid.addWidget(self.image_item, 0, 1)
+        grid.addWidget(self.horiz_profile, 1, 1)
+        grid.addWidget(self.pixel_label, 2, 0, 1, 2)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(0, 1)
+        layout.addLayout(grid)
+
         self.state = DisplayState()
         self._install_aoi_drag()
         self._vb.scene().sigMouseMoved.connect(self._on_mouse_moved)
@@ -69,24 +78,38 @@ class MaranaImageView(QtWidgets.QWidget):
         self._lo: float | None = None
         self._hi: float | None = None
 
-    def _build_histogram(self, layout) -> None:
-        self.hist_plot = pg.PlotWidget()
-        self.hist_plot.setFixedHeight(120)
-        self.hist_plot.setLogMode(x=False, y=True)        # log count: shows the faint signal tail
-        self.hist_plot.setMouseEnabled(x=False, y=False)
-        self.hist_plot.hideButtons()
-        self.hist_plot.setMenuEnabled(False)
-        self.hist_plot.setXRange(0, self._full_scale, padding=0)
-        self.hist_plot.setLabel("bottom", "pixel value")
-        self.hist_plot.getPlotItem().showGrid(x=False, y=False)
-        self.hist_curve = self.hist_plot.plot([], [], stepMode="center", pen=pg.mkPen("#22d3ee"))
-        self.black_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#e5e7eb", width=2))
-        self.white_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#facc15", width=2))
-        for ln in (self.black_line, self.white_line):
-            ln.setBounds([0, self._full_scale])
-            self.hist_plot.addItem(ln)
-            ln.sigDragged.connect(self._on_line_dragged)   # only fires on user drags, not setValue
-        layout.addWidget(self.hist_plot)
+    def _build_profiles(self) -> None:
+        """Line-profile panes: intensity vs pixel position for the cursor's row
+        (horizontal, bottom) and column (vertical, left). Orange trace, black
+        background, white axes — Andor Solis style."""
+        orange = pg.mkPen("#ff8c00", width=1)
+
+        def _style(pw):
+            pw.setBackground("k")
+            pw.setMouseEnabled(x=False, y=False)
+            pw.hideButtons()
+            pw.setMenuEnabled(False)
+            for ax in ("left", "bottom"):
+                a = pw.getAxis(ax)
+                a.setPen("w")
+                a.setTextPen("w")
+
+        self.horiz_profile = pg.PlotWidget()
+        self.horiz_profile.setFixedHeight(130)
+        _style(self.horiz_profile)
+        self.horiz_profile.setLabel("bottom", "x (px)")
+        self.horiz_curve = self.horiz_profile.plot([], [], pen=orange)
+        self.horiz_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("#64748b", width=1))
+        self.horiz_profile.addItem(self.horiz_cursor)
+
+        self.vert_profile = pg.PlotWidget()
+        self.vert_profile.setFixedWidth(130)
+        _style(self.vert_profile)
+        self.vert_profile.setLabel("left", "y (px)")
+        self.vert_profile.getPlotItem().invertY(True)   # row 0 at top, like the image
+        self.vert_curve = self.vert_profile.plot([], [], pen=orange)   # x=intensity, y=row
+        self.vert_cursor = pg.InfiniteLine(angle=0, pen=pg.mkPen("#64748b", width=1))
+        self.vert_profile.addItem(self.vert_cursor)
 
     # --- display transforms ----------------------------------------------
 
@@ -132,29 +155,11 @@ class MaranaImageView(QtWidgets.QWidget):
         return (lo, hi)
 
     def _apply_levels(self) -> None:
-        """Push _lo/_hi to the image + histogram lines and notify the panel."""
+        """Push _lo/_hi to the image and notify the contrast panel."""
         if self._lo is None or self._hi is None:
             return
         self.image_item.setLevels(self._lo, self._hi)
-        self.black_line.setValue(self._lo)   # setValue does NOT emit sigDragged -> no loop
-        self.white_line.setValue(self._hi)
         self.levelsChanged.emit(self._lo, self._hi)
-
-    def _on_line_dragged(self) -> None:
-        """User dragged a black/white line -> update the levels."""
-        lo = float(self.black_line.value())
-        hi = float(self.white_line.value())
-        if hi <= lo:
-            hi = lo + 1.0
-            self.white_line.setValue(hi)
-        self._lo, self._hi = lo, hi
-        self.image_item.setLevels(lo, hi)
-        self.levelsChanged.emit(lo, hi)
-        self.userEditedLevels.emit()
-
-    def _update_histogram(self, frame: np.ndarray) -> None:
-        counts, edges = np.histogram(frame, bins=512, range=(0, self._full_scale))
-        self.hist_curve.setData(edges, counts)
 
     # --- rendering --------------------------------------------------------
 
@@ -176,7 +181,6 @@ class MaranaImageView(QtWidgets.QWidget):
             self._lo, self._hi = self._auto_levels(frame)
         view = self._apply_transform(frame)
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
-        self._update_histogram(frame)
         if recompute:
             self._apply_levels()
         elif self._lo is not None:
@@ -184,26 +188,47 @@ class MaranaImageView(QtWidgets.QWidget):
             self.image_item.setLevels(self._lo, self._hi)
 
     def _on_mouse_moved(self, scene_pos) -> None:
-        """Show raw-frame x/y and pixel value under the cursor in the readout strip."""
+        """Update the pixel readout and the row/column line profiles for the cursor."""
         if self._last_raw is None or not self._vb.sceneBoundingRect().contains(scene_pos):
             self.pixel_label.setText("")
             return
         p = self._vb.mapSceneToView(scene_pos)
-        self.pixel_label.setText(self._pixel_text_at(int(p.y()), int(p.x())))
+        rc = self._raw_coords_at(int(p.y()), int(p.x()))
+        if rc is None:
+            self.pixel_label.setText("")
+            return
+        rr, cc = rc
+        self.pixel_label.setText(f"x={cc}  y={rr}  value={int(self._last_raw[rr, cc])}")
+        self._update_profiles(rr, cc)
 
-    def _pixel_text_at(self, drow: int, dcol: int) -> str:
-        """Readout text for a displayed-image (row, col): inverts flip/rot to the
-        raw pixel and reads its value. Empty string if out of the frame."""
+    def _raw_coords_at(self, drow: int, dcol: int):
+        """Map a displayed-image (row, col) back to raw (row, col), inverting
+        flip/rotation. Returns None if outside the frame."""
         if self._last_raw is None:
-            return ""
+            return None
         H, W = self._last_raw.shape
         Ht, Wt = (W, H) if self.state.rot in (90, 270) else (H, W)
         if not (0 <= drow < Ht and 0 <= dcol < Wt):
-            return ""
-        rr, cc = self._inv_point(drow, dcol, H, W)   # invert flip/rot -> raw coords
+            return None
+        rr, cc = self._inv_point(drow, dcol, H, W)
         if 0 <= rr < H and 0 <= cc < W:
-            return f"x={cc}  y={rr}  value={int(self._last_raw[rr, cc])}"
-        return ""
+            return (rr, cc)
+        return None
+
+    def _pixel_text_at(self, drow: int, dcol: int) -> str:
+        rc = self._raw_coords_at(drow, dcol)
+        if rc is None:
+            return ""
+        rr, cc = rc
+        return f"x={cc}  y={rr}  value={int(self._last_raw[rr, cc])}"
+
+    def _update_profiles(self, rr: int, cc: int) -> None:
+        """Set the horizontal (row rr) and vertical (column cc) intensity profiles."""
+        H, W = self._last_raw.shape
+        self.horiz_curve.setData(np.arange(W), self._last_raw[rr, :])
+        self.horiz_cursor.setValue(cc)
+        self.vert_curve.setData(self._last_raw[:, cc], np.arange(H))   # x=intensity, y=row
+        self.vert_cursor.setValue(rr)
 
     def _install_aoi_drag(self) -> None:
         """Disable view panning (no value here) and repurpose left-drag to draw

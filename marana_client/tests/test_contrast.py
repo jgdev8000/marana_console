@@ -68,32 +68,20 @@ def test_set_levels_persists_and_emits(app):
     assert _levels(iv) == (300.0, 9000.0)
 
 
-def test_histogram_lines_track_levels(app):
+def test_line_profiles_follow_cursor(app):
     iv = MaranaImageView()
-    frame = np.zeros((8, 8), dtype=np.uint16)
-    frame[7, 7] = 1000
-    iv.update_frame(frame)
-    lo, hi = _levels(iv)
-    assert iv.black_line.value() == pytest.approx(lo)
-    assert iv.white_line.value() == pytest.approx(hi)
-    # X axis spans the full 16-bit range.
-    x0, x1 = iv.hist_plot.getPlotItem().vb.viewRange()[0]
-    assert x0 <= 0 and x1 >= 65535 - 1
-
-
-def test_histogram_line_drag_updates_levels_and_flags_user(app):
-    iv = MaranaImageView()
-    iv.update_frame(np.full((8, 8), 100, dtype=np.uint16))
-    changed, user = [], []
-    iv.levelsChanged.connect(lambda lo, hi: changed.append((lo, hi)))
-    iv.userEditedLevels.connect(lambda: user.append(True))
-    # Simulate a user dragging the lines.
-    iv.black_line.setValue(123.0)
-    iv.white_line.setValue(4567.0)
-    iv._on_line_dragged()
-    assert iv._lo == pytest.approx(123.0) and iv._hi == pytest.approx(4567.0)
-    assert changed[-1] == pytest.approx((123.0, 4567.0))
-    assert user  # flagged as a manual edit
+    f = np.arange(20 * 30, dtype=np.uint16).reshape(20, 30)   # value = row*30 + col
+    iv.update_frame(f)
+    iv._update_profiles(5, 10)   # raw row 5, col 10
+    xh, yh = iv.horiz_curve.getData()
+    xv, yv = iv.vert_curve.getData()
+    # horizontal profile = intensity across row 5 (x = column index)
+    assert list(xh[:3]) == [0, 1, 2]
+    assert list(int(v) for v in yh[:3]) == [150, 151, 152]
+    # vertical profile = intensity down column 10 (y = row index, x = intensity)
+    assert list(yv[:3]) == [0, 1, 2]
+    assert list(int(v) for v in xv[:3]) == [10, 40, 70]
+    assert iv.horiz_cursor.value() == 10 and iv.vert_cursor.value() == 5
 
 
 def test_pixel_readout_reports_raw_xy_and_value(app):
