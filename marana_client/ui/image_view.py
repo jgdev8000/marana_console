@@ -52,6 +52,10 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
         layout.addWidget(self.image_item)
+        # Pixel readout strip under the image: x, y, and value under the cursor.
+        self.pixel_label = QtWidgets.QLabel("")
+        self.pixel_label.setStyleSheet("color: #94a3b8; font-family: monospace; padding: 2px 6px;")
+        layout.addWidget(self.pixel_label)
         # Pin the histogram axis to the full 16-bit range so its numbers are
         # absolute sensor counts (0..65535), not auto-scaled to the data — the
         # level region then shows where black/white sit within the full range.
@@ -59,6 +63,7 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
         self.state = DisplayState()
         self._install_aoi_drag()
+        self._vb.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
         # Single source of truth: the actual black/white display levels (pixel
         # values). None until the first frame establishes them.
@@ -155,6 +160,28 @@ class MaranaImageView(QtWidgets.QWidget):
         elif self._lo is not None:
             # Re-assert current levels (setImage can reset them) without recomputing.
             self.image_item.setLevels(self._lo, self._hi)
+
+    def _on_mouse_moved(self, scene_pos) -> None:
+        """Show raw-frame x/y and pixel value under the cursor in the readout strip."""
+        if self._last_raw is None or not self._vb.sceneBoundingRect().contains(scene_pos):
+            self.pixel_label.setText("")
+            return
+        p = self._vb.mapSceneToView(scene_pos)
+        self.pixel_label.setText(self._pixel_text_at(int(p.y()), int(p.x())))
+
+    def _pixel_text_at(self, drow: int, dcol: int) -> str:
+        """Readout text for a displayed-image (row, col): inverts flip/rot to the
+        raw pixel and reads its value. Empty string if out of the frame."""
+        if self._last_raw is None:
+            return ""
+        H, W = self._last_raw.shape
+        Ht, Wt = (W, H) if self.state.rot in (90, 270) else (H, W)
+        if not (0 <= drow < Ht and 0 <= dcol < Wt):
+            return ""
+        rr, cc = self._inv_point(drow, dcol, H, W)   # invert flip/rot -> raw coords
+        if 0 <= rr < H and 0 <= cc < W:
+            return f"x={cc}  y={rr}  value={int(self._last_raw[rr, cc])}"
+        return ""
 
     def _install_aoi_drag(self) -> None:
         """Disable view panning (no value here) and repurpose left-drag to draw

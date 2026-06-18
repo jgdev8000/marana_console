@@ -86,3 +86,22 @@ def test_histogram_drag_updates_levels_and_flags_user(app):
     assert iv._lo == pytest.approx(123.0) and iv._hi == pytest.approx(4567.0)
     assert changed[-1] == pytest.approx((123.0, 4567.0))
     assert user  # flagged as a manual edit
+
+
+def test_pixel_readout_reports_raw_xy_and_value(app):
+    iv = MaranaImageView()
+    f = np.arange(20 * 30, dtype=np.uint16).reshape(20, 30)  # value = row*30 + col
+    iv.update_frame(f)
+    # rot=0, no flip: displayed (row,col) == raw (row,col)
+    assert iv._pixel_text_at(5, 10) == "x=10  y=5  value=160"
+    # out of bounds -> empty
+    assert iv._pixel_text_at(100, 100) == ""
+
+
+def test_pixel_readout_inverts_flip(app):
+    iv = MaranaImageView()
+    f = np.arange(20 * 30, dtype=np.uint16).reshape(20, 30)
+    iv.update_frame(f)
+    iv.set_flip(h=True, v=False)   # horizontal flip
+    # displayed col 0 maps to raw col W-1=29 at row 5 -> value 5*30+29=179
+    assert iv._pixel_text_at(5, 0) == "x=29  y=5  value=179"
