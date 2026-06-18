@@ -66,6 +66,11 @@ QPushButton#stopButton:enabled {
     border-color: #f59e0b;
     color: #f59e0b;
 }
+QPushButton#snapButton:checked {
+    background-color: #3b2f0a;
+    border-color: #facc15;
+    color: #facc15;
+}
 QPushButton#toggleButton:checked {
     background-color: #0f5132;
     border-color: #10b981;

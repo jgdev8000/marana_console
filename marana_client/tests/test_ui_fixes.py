@@ -1,7 +1,6 @@
 """Tests for three client UI fixes:
   1. ConnectionCard recovers from DEGRADED back to HEALTHY (mark_healthy).
   2. The kinetic scrubber shows only on the kinetic tab AND when frames exist.
-  3. QuickAcquireDialog collects exposure / gain / frame-count for ACQUIRE & SAVE.
 """
 import os
 
@@ -16,7 +15,6 @@ from marana_client.ui.main_window import MainWindow
 from marana_client.ui.live_panel import LivePanel
 from marana_client.ui.kinetic_panel import KineticPanel
 from marana_client.ui.focus_panel import FocusPanel
-from marana_client.ui.quick_acquire_dialog import QuickAcquireDialog
 
 
 @pytest.fixture(scope="module")
@@ -79,31 +77,3 @@ def test_scrubber_follows_tab_switches(app):
     assert not win.scrubber_strip.isVisibleTo(win)
     win.left_tabs.setCurrentWidget(win.kinetic_tab)   # returning shows it again
     assert win.scrubber_strip.isVisibleTo(win)
-
-
-# --- 3. quick-acquire dialog ------------------------------------------------
-
-def test_quick_acquire_values_roundtrip(app):
-    d = QuickAcquireDialog(exposure_s=0.02,
-                           gain_options=["12-bit (low noise)", "16-bit (high well cap)"],
-                           current_gain="16-bit (high well cap)")
-    d.exposure_spin.setValue(0.05)
-    d.frames_spin.setValue(10)
-    v = d.values()
-    assert abs(v["exposure_s"] - 0.05) < 1e-9
-    assert v["frame_count"] == 10
-    assert v["gain"] == "16-bit (high well cap)"
-
-
-def test_quick_acquire_defaults_to_current(app):
-    d = QuickAcquireDialog(exposure_s=0.123, gain_options=["A", "B"], current_gain="B")
-    v = d.values()
-    assert abs(v["exposure_s"] - 0.123) < 1e-9
-    assert v["gain"] == "B"
-    assert v["frame_count"] == 1          # default single frame
-
-
-def test_quick_acquire_gain_omitted_when_unavailable(app):
-    d = QuickAcquireDialog(exposure_s=0.02, gain_options=[], current_gain=None)
-    assert d.gain_combo.count() == 0
-    assert d.values()["gain"] is None

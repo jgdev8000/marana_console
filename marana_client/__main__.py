@@ -11,7 +11,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from marana_client import config as cfg_mod
 from marana_client.client import MaranaClient, ClientRequestTimeout
-from marana_client.io_tiff import write_snapshot, write_stack
+from marana_client.io_tiff import write_snapshot
 from marana_client.meta import build_snapshot_metadata
 from marana_client.worker import ClientWorker
 from marana_client.ui.connection_card import ConnectionCard
@@ -20,7 +20,6 @@ from marana_client.ui.kinetic_panel import KineticPanel
 from marana_client.ui.kinetic_save_dialog import KineticSaveDialog
 from marana_client.ui.live_panel import LivePanel
 from marana_client.ui.focus_panel import FocusPanel
-from marana_client.ui.quick_acquire_dialog import QuickAcquireDialog
 from marana_client.ui.main_window import MainWindow
 from marana_client.ui.side_panels import (
     CoolingPanel, DisplayPanel, ContrastPanel, StatusLog,
@@ -78,7 +77,6 @@ def main(argv=None) -> int:
     live_auto = {"on": False}   # auto-display mode: when True, every shown frame (live/kinetic/
                                 # focus/scrub) auto-stretches. Auto turns it on; manual edit or
                                 # live restart turns it off.
-    quick_acq = {"active": False, "restore": None}   # ACQUIRE & SAVE quick-acquisition context
 
     # --- Hello + populate features ---
     try:
@@ -220,42 +218,6 @@ def main(argv=None) -> int:
         except Exception as e:
             status_log.append(f"save failed: {e}", "error")
 
-    def _acquire_and_save():
-        """Quick-acquisition button: pop a modal for exposure / gain / frame
-        count, run a one-shot kinetic burst with those settings, then save the
-        result (the save + exposure/gain restore happen on KINETIC_COMPLETE).
-        SNAP & SAVE remains the one-click 'save the current frame' path."""
-        if quick_acq["active"]:
-            status_log.append("a quick acquisition is already running", "warn")
-            return
-        gain_opts = [live.gain_combo.itemText(i) for i in range(live.gain_combo.count())]
-        cur_gain = live.gain_combo.currentText() if live.gain_combo.count() else None
-        dlg = QuickAcquireDialog(exposure_s=live.exposure_spin.value(),
-                                 gain_options=gain_opts, current_gain=cur_gain, parent=win)
-        if not dlg.exec():
-            return
-        vals = dlg.values()
-        # Remember the live settings so we can put them back when the burst ends.
-        quick_acq["restore"] = {"exposure_s": live.exposure_spin.value(), "gain": cur_gain}
-        quick_acq["active"] = True
-        # Apply requested settings (gain also drives encoding + indicators).
-        safe_req("set_feature", {"name": "ExposureTime", "value": vals["exposure_s"]})
-        live.set_exposure_value(vals["exposure_s"])
-        if vals["gain"]:
-            _on_set_feature("GainMode", vals["gain"])
-        # Reuse the server kinetic burst path (frames=1 -> single-frame stack).
-        safe_req("stop", {})
-        win.set_live_indicator(False)
-        win.set_scrubber_available(False)
-        r = safe_req("start_kinetic", {"frame_count": vals["frame_count"],
-                                       "exposure_s": vals["exposure_s"],
-                                       "frame_rate_hz": 200.0})
-        if r is None:
-            quick_acq["active"] = False
-            return
-        safe_req("confirm_kinetic", {})
-        status_log.append(f"quick acquire: {vals['frame_count']} frame(s) @ {vals['exposure_s']}s", "info")
-
     def _snap_display():
         # Acquire one fresh frame and show it — no save dialog, nothing written.
         nonlocal latest_live_frame, latest_live_header
@@ -289,7 +251,6 @@ def main(argv=None) -> int:
     live.requestSnapDisplay.connect(_snap_display)
     live.requestSnapNow.connect(_snap_now)
     live.requestSaveDisplayed.connect(_save_displayed)
-    live.requestAcquireAndSave.connect(_acquire_and_save)
 
     # Kinetic flow — must call `stop` first so the server isn't already in LIVE
     # (the ICE server's contract; concurrent SDK threads cause AT_ERR_TIMEDOUT).
@@ -317,61 +278,6 @@ def main(argv=None) -> int:
             if r is not None:
                 status_log.append(f"saved stack: {r['path']} ({r['bytes_written']} bytes)", "info")
                 cfg["kinetic_subdir"] = "/".join(rel.split("/")[:-1]); cfg_mod.save(cfg)
-
-    def _finish_quick_acquire(frames_done: int):
-        """KINETIC_COMPLETE handler for an ACQUIRE & SAVE quick acquisition: pull
-        the buffered frames off the server and save them to the CLIENT PC (one
-        frame -> single-page TIFF; N>1 -> multi-page stack), then restore the live
-        exposure/gain."""
-        try:
-            if frames_done <= 0:
-                status_log.append("quick acquire produced no frames", "warn")
-                return
-            first = safe_req("get_kinetic_frame", {"index": 0}, timeout_ms=30_000)
-            if first is None:
-                return
-            h = first["header"]["height"]; w = first["header"]["width"]
-            stack = np.empty((frames_done, h, w), dtype=np.uint16)
-            stack[0] = np.frombuffer(first["frame_bytes"], dtype=np.uint16).reshape(h, w)
-            for i in range(1, frames_done):
-                r = safe_req("get_kinetic_frame", {"index": i}, timeout_ms=30_000)
-                if r is None:
-                    status_log.append(f"quick acquire: frame {i} fetch failed; saving {i}", "warn")
-                    stack = stack[:i]
-                    break
-                stack[i] = np.frombuffer(r["frame_bytes"], dtype=np.uint16).reshape(h, w)
-            n = int(stack.shape[0])
-            default = f"{cfg.get('snapshot_dir', '.')}/marana_acq.tif"
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                win, "Save acquired image" + ("s" if n > 1 else ""), default, "TIFF (*.tif)")
-            if not path:
-                status_log.append("quick acquire: save cancelled", "warn")
-                return
-            md = build_snapshot_metadata(
-                server_info, first["header"],
-                display={"rot": image_view.state.rot,
-                         "flip_h": image_view.state.flip_h,
-                         "flip_v": image_view.state.flip_v},
-                extra={"frame_count": n, "mode": "quick_acquire"})
-            try:
-                if n == 1:
-                    write_snapshot(path, stack[0], md)
-                else:
-                    write_stack(path, stack, md)
-                status_log.append(f"saved {path} ({n} frame(s))", "info")
-                cfg["snapshot_dir"] = os.path.dirname(path); cfg_mod.save(cfg)
-            except Exception as e:
-                status_log.append(f"save failed: {e}", "error")
-        finally:
-            rest = quick_acq.get("restore") or {}
-            quick_acq["active"] = False
-            quick_acq["restore"] = None
-            if rest.get("exposure_s") is not None:
-                safe_req("set_feature", {"name": "ExposureTime", "value": rest["exposure_s"]})
-                live.set_exposure_value(rest["exposure_s"])
-            if rest.get("gain"):
-                _on_set_feature("GainMode", rest["gain"])
-            status_log.append("quick acquire done; restored live exposure/gain", "info")
 
     def _save_frame(index: int):
         r = safe_req("get_kinetic_frame", {"index": index}, timeout_ms=30_000)
@@ -495,8 +401,6 @@ def main(argv=None) -> int:
             kinetic.on_complete(header["frames_done"], header["frames_total"], header.get("partial", False))
             win.set_scrubber_available(header["frames_done"] > 0)
             win.set_live_indicator(False)
-            if quick_acq["active"]:
-                _finish_quick_acquire(header["frames_done"])
         elif topic == m.TOPIC_FOCUS_COMPLETE:
             done = header["frames_done"]
             partial = header.get("partial", False)
