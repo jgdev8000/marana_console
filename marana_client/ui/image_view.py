@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Auto-contrast bias applied on top of the best-fit (min..max) window, as a
 # percentage of the data span, to approximate Andor Solis's auto. Tune here.
@@ -99,9 +99,12 @@ class MaranaImageView(QtWidgets.QWidget):
         # Single source of truth: the actual black/white display levels (pixel values).
         self._lo: float | None = None
         self._hi: float | None = None
-        # Sweet-spot crosshair marker.
+        # Sweet-spot crosshair marker: a thin '+' symbol (two lines, no circle).
         self._sweetspot_mode = False
         self._sweetspot_marker = None
+        self._cross_symbol = QtGui.QPainterPath()
+        self._cross_symbol.moveTo(-0.5, 0.0); self._cross_symbol.lineTo(0.5, 0.0)
+        self._cross_symbol.moveTo(0.0, -0.5); self._cross_symbol.lineTo(0.0, 0.5)
 
     def set_sweetspot_mode(self) -> None:
         """Arm placement: next left-click in the image drops/moves the crosshair."""
@@ -113,10 +116,12 @@ class MaranaImageView(QtWidgets.QWidget):
             return
         p = self._vb.mapSceneToView(ev.scenePos())
         if self._sweetspot_marker is None:
-            # Small white '+' crosshair (no circle), constant pixel size.
+            # Thin white crosshair, no circle; cosmetic pen keeps it 1px at any size.
+            pen = pg.mkPen("#ffffff")
+            pen.setCosmetic(True)
             self._sweetspot_marker = pg.ScatterPlotItem(
-                [p.x()], [p.y()], symbol="+", size=11,
-                pen=pg.mkPen("#ffffff", width=1), brush=None)
+                [p.x()], [p.y()], symbol=self._cross_symbol, size=18,
+                pen=pen, brush=None, pxMode=True)
             self._vb.addItem(self._sweetspot_marker)
         else:
             self._sweetspot_marker.setData([p.x()], [p.y()])
