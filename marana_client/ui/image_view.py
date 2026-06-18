@@ -72,7 +72,16 @@ class MaranaImageView(QtWidgets.QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(0)
         grid.addWidget(self.vert_profile, 0, 0)
-        grid.addWidget(self.image_item, 0, 1)
+        # Thin bordered frame around the image to delineate it from the profiles.
+        img_frame = QtWidgets.QFrame()
+        img_frame.setObjectName("imageFrame")
+        img_frame.setStyleSheet(
+            "QFrame#imageFrame { border: 1px solid #334155; background-color: #000; }")
+        fl = QtWidgets.QVBoxLayout(img_frame)
+        fl.setContentsMargins(1, 1, 1, 1)
+        fl.setSpacing(0)
+        fl.addWidget(self.image_item)
+        grid.addWidget(img_frame, 0, 1)
         grid.addWidget(self.horiz_profile, 1, 1)
         corner = QtWidgets.QWidget()   # explicit black filler so the empty cell isn't blue
         corner.setStyleSheet("background-color: #000;")
