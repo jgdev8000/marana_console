@@ -121,5 +121,5 @@ def test_sweetspot_places_crosshair_on_click(app):
     iv._on_mouse_clicked(_Ev(sp))
     assert iv._sweetspot_marker is not None      # placed and persists
     assert iv._sweetspot_mode is False           # disarmed after placing
-    assert iv._sweetspot_marker.pos().x() == pytest.approx(4.0)
-    assert iv._sweetspot_marker.pos().y() == pytest.approx(6.0)
+    xs, ys = iv._sweetspot_marker.getData()
+    assert xs[0] == pytest.approx(4.0) and ys[0] == pytest.approx(6.0)

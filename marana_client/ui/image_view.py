@@ -113,12 +113,13 @@ class MaranaImageView(QtWidgets.QWidget):
             return
         p = self._vb.mapSceneToView(ev.scenePos())
         if self._sweetspot_marker is None:
-            self._sweetspot_marker = pg.TargetItem(
-                pos=(p.x(), p.y()), size=18, movable=True,
-                pen=pg.mkPen("#fde047", width=2))
+            # Small white '+' crosshair (no circle), constant pixel size.
+            self._sweetspot_marker = pg.ScatterPlotItem(
+                [p.x()], [p.y()], symbol="+", size=11,
+                pen=pg.mkPen("#ffffff", width=1), brush=None)
             self._vb.addItem(self._sweetspot_marker)
         else:
-            self._sweetspot_marker.setPos(p)
+            self._sweetspot_marker.setData([p.x()], [p.y()])
         self._sweetspot_mode = False
         self.image_item.getView().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         ev.accept()
