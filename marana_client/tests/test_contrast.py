@@ -42,6 +42,13 @@ def test_best_fit_rescales_every_frame(app):
     assert _levels(iv) != first
 
 
+def test_histogram_axis_pinned_to_full_16bit(app):
+    iv = MaranaImageView()
+    iv.update_frame(np.full((8, 8), 200, dtype=np.uint16))   # narrow data
+    lo, hi = iv.image_item.ui.histogram.item.vb.viewRange()[1]
+    assert (round(lo), round(hi)) == (0, 65535)
+
+
 def test_offsets_apply_on_top_of_best_fit(app):
     iv = MaranaImageView()
     frame = np.zeros((8, 8), dtype=np.uint16)

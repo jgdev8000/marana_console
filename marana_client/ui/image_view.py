@@ -40,6 +40,11 @@ class MaranaImageView(QtWidgets.QWidget):
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
         layout.addWidget(self.image_item)
+        # Pin the histogram axis to the full 16-bit range so its numbers are
+        # absolute sensor counts (0..65535), not auto-scaled to the data — the
+        # level region then shows where black/white sit within the full range.
+        self._full_scale = 65535
+        self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
         self.state = DisplayState()
         self._install_aoi_drag()
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
@@ -121,6 +126,8 @@ class MaranaImageView(QtWidgets.QWidget):
         view = self._apply_transform(frame)
         levels = self._effective_levels()
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
+        # Keep the histogram axis pinned to full scale (setImage can nudge it).
+        self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
         if levels is not None:
             self.image_item.setLevels(levels[0], levels[1])
 
