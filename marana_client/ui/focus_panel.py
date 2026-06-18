@@ -215,8 +215,7 @@ class FocusPanel(QtWidgets.QWidget):
             f"Start Z: {plan['z_start_um']:+.3f} µm\n"
             f"End Z:   {plan['z_end_um']:+.3f} µm\n"
             f"Stops:   {plan['stop_count']}\n"
-            f"Estimated time: {plan['est_time_s']:.1f} s\n\n"
-            f"Limits: {plan['dllm_mm']*1e3:+.0f} .. {plan['dhlm_mm']*1e3:+.0f} µm"
+            f"Estimated time: {plan['est_time_s']:.1f} s"
         )
         box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
         if box.exec() != QtWidgets.QMessageBox.StandardButton.Yes:

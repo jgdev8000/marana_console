@@ -145,8 +145,7 @@ class KineticPanel(QtWidgets.QWidget):
             box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
             box.setText("Large kinetic burst")
             box.setInformativeText(
-                f"This run will allocate {_human_bytes(ram_estimate)} on the server.\n"
-                f"Server free RAM: {_human_bytes(ram_free) if ram_free else 'unknown'}.\n\n"
+                f"This run will allocate {_human_bytes(ram_estimate)} on the server.\n\n"
                 f"Proceed?"
             )
             box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
