@@ -48,29 +48,45 @@ class MaranaImageView(QtWidgets.QWidget):
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        self._full_scale = 65535
         self.image_item = pg.ImageView()
         self.image_item.ui.roiBtn.hide()
         self.image_item.ui.menuBtn.hide()
-        layout.addWidget(self.image_item)
+        self.image_item.ui.histogram.hide()   # replaced by the horizontal histogram below
+        layout.addWidget(self.image_item, stretch=1)
         # Pixel readout strip under the image: x, y, and value under the cursor.
         self.pixel_label = QtWidgets.QLabel("")
         self.pixel_label.setStyleSheet("color: #94a3b8; font-family: monospace; padding: 2px 6px;")
         layout.addWidget(self.pixel_label)
-        # Pin the histogram axis to the full 16-bit range so its numbers are
-        # absolute sensor counts (0..65535), not auto-scaled to the data — the
-        # level region then shows where black/white sit within the full range.
-        self._full_scale = 65535
-        self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
+        # Horizontal histogram: pixel value (0..65535) on X, log count on Y, with
+        # draggable black/white lines that drive the display levels.
+        self._build_histogram(layout)
         self.state = DisplayState()
         self._install_aoi_drag()
         self._vb.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self._last_raw: np.ndarray | None = None       # last frame, untransformed
-        # Single source of truth: the actual black/white display levels (pixel
-        # values). None until the first frame establishes them.
+        # Single source of truth: the actual black/white display levels (pixel values).
         self._lo: float | None = None
         self._hi: float | None = None
-        # Capture user drags of the histogram handles and mirror them into _lo/_hi.
-        self.image_item.ui.histogram.item.sigLevelsChanged.connect(self._on_hist_levels)
+
+    def _build_histogram(self, layout) -> None:
+        self.hist_plot = pg.PlotWidget()
+        self.hist_plot.setFixedHeight(120)
+        self.hist_plot.setLogMode(x=False, y=True)        # log count: shows the faint signal tail
+        self.hist_plot.setMouseEnabled(x=False, y=False)
+        self.hist_plot.hideButtons()
+        self.hist_plot.setMenuEnabled(False)
+        self.hist_plot.setXRange(0, self._full_scale, padding=0)
+        self.hist_plot.setLabel("bottom", "pixel value")
+        self.hist_plot.getPlotItem().showGrid(x=False, y=False)
+        self.hist_curve = self.hist_plot.plot([], [], stepMode="center", pen=pg.mkPen("#22d3ee"))
+        self.black_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#e5e7eb", width=2))
+        self.white_line = pg.InfiniteLine(angle=90, movable=True, pen=pg.mkPen("#facc15", width=2))
+        for ln in (self.black_line, self.white_line):
+            ln.setBounds([0, self._full_scale])
+            self.hist_plot.addItem(ln)
+            ln.sigDragged.connect(self._on_line_dragged)   # only fires on user drags, not setValue
+        layout.addWidget(self.hist_plot)
 
     # --- display transforms ----------------------------------------------
 
@@ -116,22 +132,29 @@ class MaranaImageView(QtWidgets.QWidget):
         return (lo, hi)
 
     def _apply_levels(self) -> None:
-        """Push _lo/_hi to the image + histogram and notify the panel."""
+        """Push _lo/_hi to the image + histogram lines and notify the panel."""
         if self._lo is None or self._hi is None:
             return
         self.image_item.setLevels(self._lo, self._hi)
+        self.black_line.setValue(self._lo)   # setValue does NOT emit sigDragged -> no loop
+        self.white_line.setValue(self._hi)
         self.levelsChanged.emit(self._lo, self._hi)
 
-    def _on_hist_levels(self) -> None:
-        """Histogram handle drag -> mirror into _lo/_hi (ignore our own programmatic
-        setLevels, which already match)."""
-        lo, hi = self.image_item.ui.histogram.item.getLevels()
-        if (self._lo is not None
-                and abs(lo - self._lo) < 1e-6 and abs(hi - self._hi) < 1e-6):
-            return  # programmatic echo, not a user drag
-        self._lo, self._hi = float(lo), float(hi)
-        self.levelsChanged.emit(self._lo, self._hi)
+    def _on_line_dragged(self) -> None:
+        """User dragged a black/white line -> update the levels."""
+        lo = float(self.black_line.value())
+        hi = float(self.white_line.value())
+        if hi <= lo:
+            hi = lo + 1.0
+            self.white_line.setValue(hi)
+        self._lo, self._hi = lo, hi
+        self.image_item.setLevels(lo, hi)
+        self.levelsChanged.emit(lo, hi)
         self.userEditedLevels.emit()
+
+    def _update_histogram(self, frame: np.ndarray) -> None:
+        counts, edges = np.histogram(frame, bins=512, range=(0, self._full_scale))
+        self.hist_curve.setData(edges, counts)
 
     # --- rendering --------------------------------------------------------
 
@@ -153,8 +176,7 @@ class MaranaImageView(QtWidgets.QWidget):
             self._lo, self._hi = self._auto_levels(frame)
         view = self._apply_transform(frame)
         self.image_item.setImage(view.T, autoLevels=False, autoRange=False, autoHistogramRange=False)
-        # Keep the histogram axis pinned to full scale (setImage can nudge it).
-        self.image_item.ui.histogram.item.setHistogramRange(0, self._full_scale, padding=0)
+        self._update_histogram(frame)
         if recompute:
             self._apply_levels()
         elif self._lo is not None:

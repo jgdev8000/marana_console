@@ -68,21 +68,29 @@ def test_set_levels_persists_and_emits(app):
     assert _levels(iv) == (300.0, 9000.0)
 
 
-def test_histogram_axis_pinned_to_full_16bit(app):
+def test_histogram_lines_track_levels(app):
     iv = MaranaImageView()
-    iv.update_frame(np.full((8, 8), 200, dtype=np.uint16))
-    lo, hi = iv.image_item.ui.histogram.item.vb.viewRange()[1]
-    assert (round(lo), round(hi)) == (0, 65535)
+    frame = np.zeros((8, 8), dtype=np.uint16)
+    frame[7, 7] = 1000
+    iv.update_frame(frame)
+    lo, hi = _levels(iv)
+    assert iv.black_line.value() == pytest.approx(lo)
+    assert iv.white_line.value() == pytest.approx(hi)
+    # X axis spans the full 16-bit range.
+    x0, x1 = iv.hist_plot.getPlotItem().vb.viewRange()[0]
+    assert x0 <= 0 and x1 >= 65535 - 1
 
 
-def test_histogram_drag_updates_levels_and_flags_user(app):
+def test_histogram_line_drag_updates_levels_and_flags_user(app):
     iv = MaranaImageView()
     iv.update_frame(np.full((8, 8), 100, dtype=np.uint16))
     changed, user = [], []
     iv.levelsChanged.connect(lambda lo, hi: changed.append((lo, hi)))
     iv.userEditedLevels.connect(lambda: user.append(True))
-    # Simulate a user dragging the histogram region.
-    iv.image_item.ui.histogram.item.setLevels(123.0, 4567.0)
+    # Simulate a user dragging the lines.
+    iv.black_line.setValue(123.0)
+    iv.white_line.setValue(4567.0)
+    iv._on_line_dragged()
     assert iv._lo == pytest.approx(123.0) and iv._hi == pytest.approx(4567.0)
     assert changed[-1] == pytest.approx((123.0, 4567.0))
     assert user  # flagged as a manual edit
