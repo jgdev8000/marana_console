@@ -111,7 +111,7 @@ class ContrastPanel(QtWidgets.QFrame):
         self.white_slider.valueChanged.connect(self._on_change)
 
         auto_btn = QtWidgets.QPushButton("Auto")
-        auto_btn.setToolTip("Re-stretch to 1–99.5% of the current frame and re-center")
+        auto_btn.setToolTip("Reset to auto (best-fit + Solis-like bias) and re-center the offset sliders")
         auto_btn.clicked.connect(self.requestAuto.emit)
         lay.addWidget(auto_btn)
 

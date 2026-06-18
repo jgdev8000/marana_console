@@ -20,25 +20,36 @@ def _levels(iv):
     return tuple(float(x) for x in iv.image_item.getImageItem().levels)
 
 
-def test_best_fit_uses_frame_min_max(app):
+def test_baseline_is_frame_min_max(app):
     iv = MaranaImageView()
     frame = np.full((16, 16), 200, dtype=np.uint16)
     frame[0, 0] = 100   # min
     frame[1, 1] = 9000  # max
     iv.update_frame(frame)
-    assert _levels(iv) == (100.0, 9000.0)
+    assert iv._auto_lo == 100.0
+    assert iv._auto_hi == 9000.0
 
 
-def test_best_fit_rescales_every_frame(app):
+def test_auto_applies_solis_bias(app):
+    """Default auto = best-fit + Solis bias (black +11%, white +32% of span)."""
+    iv = MaranaImageView()
+    frame = np.zeros((8, 8), dtype=np.uint16)
+    frame[7, 7] = 1000          # min=0, max=1000, span=1000
+    iv.update_frame(frame)
+    lo, hi = _levels(iv)
+    assert lo == pytest.approx(0 + 0.11 * 1000)      # 110
+    assert hi == pytest.approx(1000 + 0.32 * 1000)   # 1320
+
+
+def test_rescales_every_frame(app):
     iv = MaranaImageView()
     iv.update_frame(np.full((8, 8), 500, dtype=np.uint16) + np.arange(64, dtype=np.uint16).reshape(8, 8))
     first = _levels(iv)
-    # A brighter frame must move the white point up (per-frame rescale, not held).
     frame2 = np.full((8, 8), 1000, dtype=np.uint16)
-    frame2[0, 0] = 50
-    frame2[7, 7] = 40000
+    frame2[0, 0] = 0
+    frame2[7, 7] = 1000          # span 1000
     iv.update_frame(frame2)
-    assert _levels(iv) == (50.0, 40000.0)
+    assert _levels(iv) == pytest.approx((110.0, 1320.0))
     assert _levels(iv) != first
 
 
@@ -49,14 +60,12 @@ def test_histogram_axis_pinned_to_full_16bit(app):
     assert (round(lo), round(hi)) == (0, 65535)
 
 
-def test_offsets_apply_on_top_of_best_fit(app):
+def test_offsets_add_to_bias(app):
     iv = MaranaImageView()
     frame = np.zeros((8, 8), dtype=np.uint16)
-    frame[0, 0] = 0
     frame[7, 7] = 1000          # span = 1000
     iv.update_frame(frame)
-    assert _levels(iv) == (0.0, 1000.0)
-    iv.set_level_offsets(10, -20)   # +10% black, -20% white of span(1000)
+    iv.set_level_offsets(10, -20)   # +10% black, -20% white ON TOP of bias 11/32
     lo, hi = _levels(iv)
-    assert lo == pytest.approx(100.0)   # 0 + 0.10*1000
-    assert hi == pytest.approx(800.0)   # 1000 - 0.20*1000
+    assert lo == pytest.approx((0.11 + 0.10) * 1000)        # 210
+    assert hi == pytest.approx(1000 + (0.32 - 0.20) * 1000)  # 1120

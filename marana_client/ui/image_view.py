@@ -2,9 +2,9 @@
 an auto-baseline + offset contrast model.
 
 Contrast model:
-- An *auto baseline* (best-fit: data min..max of the frame, like Andor Solis) is
-  recomputed on every frame, so the live view tracks the data and the in-focus
-  peak is never clipped.
+- An *auto baseline* (best-fit: data min..max of the frame) is recomputed on every
+  frame, so the live view tracks the data. A fixed bias (AUTO_BLACK/WHITE_BIAS_PCT)
+  is added to approximate Andor Solis's auto: black pushed up, white given headroom.
 - Two *offsets* (black/white, as a percentage of the auto span) sit on top of the
   baseline and persist frame-to-frame. The slider panel drives these live, so any
   contrast tweak is applied relative to the auto result.
@@ -16,6 +16,11 @@ from dataclasses import dataclass
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
+
+# Auto-contrast bias applied on top of the best-fit (min..max) window, as a
+# percentage of the data span, to approximate Andor Solis's auto. Tune here.
+AUTO_BLACK_BIAS_PCT = 11   # raise black point: push background toward black
+AUTO_WHITE_BIAS_PCT = 32   # raise white point: leave headroom above the peak
 
 
 @dataclass
@@ -102,8 +107,14 @@ class MaranaImageView(QtWidgets.QWidget):
         if self._auto_lo is None or self._auto_hi is None:
             return None
         span = self._auto_hi - self._auto_lo
-        lo = self._auto_lo + (self._black_off_pct / 100.0) * span
-        hi = self._auto_hi + (self._white_off_pct / 100.0) * span
+        # Auto = best-fit min..max plus a fixed bias that approximates Andor Solis:
+        # raise black ~11% of span (push background toward black) and white ~32%
+        # (leave headroom above the peak so it isn't blown out). User offset
+        # sliders add on top of this.
+        black = (AUTO_BLACK_BIAS_PCT + self._black_off_pct) / 100.0
+        white = (AUTO_WHITE_BIAS_PCT + self._white_off_pct) / 100.0
+        lo = self._auto_lo + black * span
+        hi = self._auto_hi + white * span
         if hi <= lo:
             hi = lo + 1.0
         return (lo, hi)
