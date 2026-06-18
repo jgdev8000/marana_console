@@ -96,10 +96,9 @@ class LivePanel(QtWidgets.QWidget):
         cap_card.layout().addWidget(self.stop_button)
         cap_card.layout().addSpacing(8)
         self.snap_display_button = QtWidgets.QPushButton("SNAP")
-        self.snap_display_button.setObjectName("snapButton")
-        self.snap_display_button.setCheckable(True)   # lights up while showing a snapped still
+        self.snap_display_button.setObjectName("snapButton")   # highlights only while pressed
         self.snap_display_button.setToolTip("Acquire one frame and display it (no save)")
-        self.snap_display_button.clicked.connect(self._on_snap_clicked)
+        self.snap_display_button.clicked.connect(self.requestSnapDisplay.emit)
         cap_card.layout().addWidget(self.snap_display_button)
         self.save_button = QtWidgets.QPushButton("SAVE")
         self.save_button.setToolTip("Save the currently displayed frame (auto-named, with metadata)")
@@ -190,13 +189,6 @@ class LivePanel(QtWidgets.QWidget):
         self.live_button.blockSignals(True)
         self.live_button.setChecked(on)
         self.live_button.blockSignals(False)
-        if on:
-            self.snap_display_button.setChecked(False)   # leaving the static snap view
-
-    def _on_snap_clicked(self) -> None:
-        """SNAP fires the acquire and stays lit to show a static snap is on screen."""
-        self.snap_display_button.setChecked(True)
-        self.requestSnapDisplay.emit()
 
     def _emit_aoi(self) -> None:
         x0 = self.aoi_spins["L"].value()

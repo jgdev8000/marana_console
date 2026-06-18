@@ -66,7 +66,7 @@ QPushButton#stopButton:enabled {
     border-color: #f59e0b;
     color: #f59e0b;
 }
-QPushButton#snapButton:checked {
+QPushButton#snapButton:pressed {
     background-color: #3b2f0a;
     border-color: #facc15;
     color: #facc15;
