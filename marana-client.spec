@@ -1,20 +1,20 @@
 # PyInstaller spec for the Marana client GUI.
 #   pyinstaller marana-client.spec
 # Produces dist/marana-client.exe (one-file, windowed). Build ON Windows.
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
-# pyqtgraph imports many submodules lazily; pull them all in so nothing is
-# missing at runtime. PyQt6 / numpy / pyzmq have built-in PyInstaller hooks.
-hiddenimports = collect_submodules("pyqtgraph")
+# pyqtgraph imports many submodules lazily and ships data files; collect_all
+# grabs submodules + data + binaries. PyQt6 / numpy / pyzmq have built-in hooks.
+pg_datas, pg_binaries, pg_hidden = collect_all("pyqtgraph")
 
 a = Analysis(
     ["run_client.py"],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=hiddenimports,
+    binaries=pg_binaries,
+    datas=pg_datas,
+    hiddenimports=pg_hidden,
     hookspath=[],
     runtime_hooks=[],
     excludes=["marana_server"],   # server code isn't needed in the client exe
