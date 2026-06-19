@@ -46,11 +46,6 @@ class KineticPanel(QtWidgets.QWidget):
         self.exposure_spin.setValue(0.005)
         self.exposure_spin.setSuffix(" s")
         grid.addWidget(self.exposure_spin, 1, 1)
-        grid.addWidget(QtWidgets.QLabel("Target FPS:"), 2, 0)
-        self.fps_spin = QtWidgets.QDoubleSpinBox()
-        self.fps_spin.setRange(0.1, 200.0)
-        self.fps_spin.setValue(100.0)
-        grid.addWidget(self.fps_spin, 2, 1)
         self.aoi_label = QtWidgets.QLabel("AOI: --")
         self.aoi_label.setStyleSheet("color: #22d3ee;")
         params.layout().addWidget(self.aoi_label)
@@ -102,7 +97,6 @@ class KineticPanel(QtWidgets.QWidget):
 
         self._aoi_for_estimate: tuple[int, int, int, int] | None = None
         self.frames_spin.valueChanged.connect(self._refresh_estimate)
-        self.fps_spin.valueChanged.connect(self._refresh_estimate)
         self.exposure_spin.valueChanged.connect(self._refresh_estimate)
 
     def _card(self, title: str) -> QtWidgets.QFrame:
@@ -131,11 +125,15 @@ class KineticPanel(QtWidgets.QWidget):
         flag = " ⚠" if budget > RAM_GUARD_BYTES else ""
         self.ram_label.setText(f"Memory: {_human_bytes(budget)}{flag}")
 
+    # Request the camera's max rate; the server clamps to what's achievable for
+    # the current exposure/AOI (Target FPS field removed).
+    _MAX_FPS = 200.0
+
     def _on_start(self) -> None:
         self.requestStartKinetic.emit(
             self.frames_spin.value(),
             self.exposure_spin.value(),
-            self.fps_spin.value(),
+            self._MAX_FPS,
         )
 
     def on_kinetic_budget_reply(self, ram_estimate: int, ram_free: int) -> None:
