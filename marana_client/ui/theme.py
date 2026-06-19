@@ -84,6 +84,43 @@ QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
     padding: 2px 6px;
     color: #e5e7eb;
 }
+/* Visible up/down step buttons for spin boxes (default arrows are near-invisible). */
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    background-color: #1e3a5f;
+    border-left: 1px solid #1e3a5f;
+    border-top-right-radius: 2px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    background-color: #1e3a5f;
+    border-left: 1px solid #1e3a5f;
+    border-bottom-right-radius: 2px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #294a73;
+}
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background-color: #22d3ee;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid #e5e7eb;
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #e5e7eb;
+}
 QTabBar::tab {
     background: #1e3a5f;
     color: #94a3b8;
