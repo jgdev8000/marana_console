@@ -12,7 +12,7 @@ import zmq
 from marana_proto import messages as m
 from marana_proto.errors import MaranaError, to_wire
 from marana_server.publisher import Publisher
-from marana_server.worker import CameraWorker
+from marana_server.worker import CameraWorker, PACIFIC_TZ
 from marana_server.io_tiff import write_image_stack, write_single_image
 from marana_server.meta import build_metadata
 from marana_server.epics_mover import EpicsMover
@@ -23,8 +23,8 @@ SERVER_VERSION = "0.1.0"
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).astimezone().isoformat()
+    from datetime import datetime
+    return datetime.now(PACIFIC_TZ).isoformat()
 
 
 def _sdk_version_str() -> str:
@@ -161,7 +161,7 @@ class MaranaService(threading.Thread):
         from datetime import datetime
         d = self._captures_dir / subdir if subdir else self._captures_dir
         d.mkdir(parents=True, exist_ok=True)
-        date = datetime.now().strftime("%y%m%d")
+        date = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
         pat = re.compile(rf"^{date}_(\d+)\.tif$")
         n = 0
         for child in d.iterdir():

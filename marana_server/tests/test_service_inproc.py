@@ -9,6 +9,7 @@ import pytest
 import zmq
 
 from marana_server.service import MaranaService
+from marana_server.worker import PACIFIC_TZ
 from marana_proto import messages as m
 
 
@@ -116,7 +117,7 @@ def test_save_focus_stack_auto_names_first_of_day(service, tmp_path):
     svc._worker._focus_meta = {"z_positions_um": [0.0, 10.0, 20.0]}
     reply = _req(ctx, "inproc://test_ctrl", "save_focus_stack", {})
     assert reply["ok"] is True
-    today = datetime.now().strftime("%y%m%d")
+    today = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
     assert reply["result"]["path"].endswith(f"focus/{today}_1.tif")
     assert (tmp_path / "focus" / f"{today}_1.tif").exists()
 
@@ -126,7 +127,7 @@ def test_save_focus_stack_auto_increments_sequence(service, tmp_path):
     from datetime import datetime
     svc, ctx = service
     svc._captures_dir = tmp_path
-    today = datetime.now().strftime("%y%m%d")
+    today = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
     fdir = tmp_path / "focus"
     fdir.mkdir()
     (fdir / f"{today}_1.tif").write_bytes(b"x")
@@ -146,7 +147,7 @@ def test_save_kinetic_stack_auto_names_in_kinetic_subdir(service, tmp_path):
     from datetime import datetime
     svc, ctx = service
     svc._captures_dir = tmp_path
-    today = datetime.now().strftime("%y%m%d")
+    today = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
     kdir = tmp_path / "kinetic"
     kdir.mkdir()
     (kdir / f"{today}_1.tif").write_bytes(b"x")   # existing -> next is _2
@@ -170,7 +171,7 @@ def test_save_snapshot_auto_names_at_root(service, tmp_path):
                  {"frame_bytes": frame.tobytes(), "width": 8, "height": 8,
                   "display": {"rot": 0, "flip_h": False, "flip_v": False}})
     assert reply["ok"] is True
-    today = datetime.now().strftime("%y%m%d")
+    today = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
     assert reply["result"]["path"].endswith(f"{today}_1.tif")
     out = tmp_path / f"{today}_1.tif"
     assert out.exists()
@@ -187,7 +188,7 @@ def test_save_snapshot_increments_shared_root_counter(service, tmp_path):
     from datetime import datetime
     svc, ctx = service
     svc._captures_dir = tmp_path
-    today = datetime.now().strftime("%y%m%d")
+    today = datetime.now(PACIFIC_TZ).strftime("%y%m%d")
     (tmp_path / f"{today}_2.tif").write_bytes(b"x")   # existing root capture
     (tmp_path / "990101_9.tif").write_bytes(b"x")      # other date -> ignored
     frame = np.zeros((4, 4), dtype=np.uint16)

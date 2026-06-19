@@ -7,7 +7,8 @@ import logging
 import queue
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Callable
 
 from marana_proto import messages as m
@@ -16,9 +17,13 @@ from marana_server.epics_mover import EpicsMover
 
 log = logging.getLogger(__name__)
 
+# All timestamps are reported in beamline-local Pacific time (handles DST),
+# regardless of the server host's system timezone.
+PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat()
+    return datetime.now(PACIFIC_TZ).isoformat()
 
 
 class WorkerState(str, enum.Enum):
